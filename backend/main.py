@@ -9,21 +9,31 @@ Run with:
 
 Then visit:
     http://localhost:8000/docs  ← interactive Swagger UI (API explorer)
+
+Fixes applied (from code review):
+  - CORS: explicit origin allowlist, removed allow_credentials+wildcard conflict
+  - asyncio.create_task: all fire-and-forget tasks wrapped with logging error handler
+  - session metadata endpoint: host can set their name and meeting topic
+  - earn_points now persists to DB (points survive restart)
+  - load-text / load-video: run in thread (non-blocking)
+  - set_ai_mode: now honors the enabled field instead of ignoring it
+  - RTC presence protected by asyncio.Lock
+  - session metadata injected into AI answer prompts
 """
 
 import sys
 import os
 import secrets
+import asyncio
+import logging
 from datetime import datetime
-# Ensure the backend folder is always in the Python path
+from contextlib import asynccontextmanager
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from contextlib import asynccontextmanager
-import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
 from pymongo.errors import ServerSelectionTimeoutError
 
 from models import (
@@ -36,6 +46,7 @@ from models import (
     MultimodalContextRequest,
     RtcTokenRequest,
     RtcTokenResponse,
+    SessionMetadataRequest,
 )
 from websockets_manager import ws_manager
 import session_manager as sm
@@ -43,32 +54,70 @@ import rewards as rw
 import database as db
 import context_manager as cm
 from duplicate_detector import is_duplicate_async, get_embedding_async
+from session_manager import validate_host_token
 
+logger = logging.getLogger("lumina_lens")
 
 # ── Lifespan: runs on startup & shutdown ──────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.connect_db()   # Connect to MongoDB Atlas on startup
+    await db.connect_db()
     yield
-    await db.close_db()     # Close connection on shutdown
+    await db.close_db()
 
 
 app = FastAPI(
     title="Lumina Lens API",
     description="AI-powered Meeting Assistant that filters duplicate questions in live meetings using NLP. Powered by Spark Rewards.",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
 # Per-session flag: whether AI Organizer is actively shaping responses.
-# AI is now default ON for all sessions.
 _ai_mode: dict[str, bool] = {}
+
+# Per-session RTC presence (protected by per-session lock)
 _rtc_presence: dict[str, set[str]] = {}
+_rtc_locks: dict[str, asyncio.Lock] = {}
 
 RTC_MAX_PARTICIPANTS = 10
+ANSWER_MATCH_THRESHOLD = 0.6
+FALLBACK_GEN_THRESHOLD = 0.5
 RTC_PROVIDER_URL = os.getenv("RTC_PROVIDER_URL", "").strip()
 RTC_API_KEY = os.getenv("RTC_API_KEY", "").strip()
 RTC_API_SECRET = os.getenv("RTC_API_SECRET", "").strip()
+
+# Allowed frontend origins — add your deployed domain as needed
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:8080",
+    "http://127.0.0.1:5173",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,  # Must be False when not using specific credentials
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _get_rtc_lock(session_id: str) -> asyncio.Lock:
+    if session_id not in _rtc_locks:
+        _rtc_locks[session_id] = asyncio.Lock()
+    return _rtc_locks[session_id]
+
+
+async def _safe_task(coro, description: str = "background task"):
+    """Wrap a coroutine so errors are logged, never silently swallowed."""
+    try:
+        await coro
+    except Exception as e:
+        logger.error(f"[{description}] failed: {e}", exc_info=True)
 
 
 def _build_rtc_identity(session_id: str, role: str, user_id: str | None) -> str:
@@ -115,11 +164,11 @@ async def _reprocess_existing_inbox_with_ai(session_id: str) -> dict:
     if not session:
         return {"resolved_by_ai": 0, "duplicates_removed": 0, "kept": 0}
 
-    # Reprocess the full attendee inbox, not only currently curated list.
-    questions = list(session.get("all_questions", session.get("questions", [])))
+    questions = list(session.get("questions", []))
     if not questions:
         return {"resolved_by_ai": 0, "duplicates_removed": 0, "kept": 0}
 
+    meta = sm.get_session_metadata(session_id)
     kept_questions: list[dict] = []
     kept_embeddings: list[list] = []
     resolved_count = 0
@@ -141,13 +190,22 @@ async def _reprocess_existing_inbox_with_ai(session_id: str) -> dict:
                     session_id,
                     q_text,
                     context_answer.get("answer", ""),
+                    meta.get("host_name"),
+                    meta.get("meeting_topic"),
                 )
                 if not answer_text:
                     raw = (context_answer.get("answer", "") or "").strip()
                     answer_text = raw.split(".")[0].strip() if raw else None
 
             if not answer_text:
-                answer_text = await asyncio.to_thread(cm.generate_answer_from_draft, session_id, q_text)
+                answer_text = await asyncio.to_thread(
+                    cm.generate_answer_from_draft,
+                    session_id,
+                    q_text,
+                    None,
+                    meta.get("host_name"),
+                    meta.get("meeting_topic"),
+                )
 
         if answer_text:
             resolved_count += 1
@@ -175,7 +233,6 @@ async def _reprocess_existing_inbox_with_ai(session_id: str) -> dict:
     session["questions"] = kept_questions
     session["embeddings"] = kept_embeddings
 
-    # Push refreshed host inbox immediately.
     await ws_manager.broadcast(
         session_id,
         {
@@ -190,24 +247,15 @@ async def _reprocess_existing_inbox_with_ai(session_id: str) -> dict:
         "kept": len(kept_questions),
     }
 
-# Catch MongoDB connectivity errors; return friendly 503 instead of 500
+
+# ── Exception Handlers ─────────────────────────────────────────────────────────
+
 @app.exception_handler(ServerSelectionTimeoutError)
 async def mongo_timeout_handler(request, exc):
     return JSONResponse(
         status_code=503,
-        content={
-            "detail": "Database temporarily unavailable. Is MongoDB running? See MONGO_URI in backend/.env",
-        },
+        content={"detail": "Database temporarily unavailable. Is MongoDB running? See MONGO_URI in backend/.env"},
     )
-
-# Allow Base44 frontend (and any local dev tool) to call this API
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],   # In production, restrict to your Base44 app domain
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 # ─────────────────────────────────────────────
@@ -218,22 +266,22 @@ app.add_middleware(
 async def start_session(session_id: str, role: str = "audience"):
     """
     Start/join a meeting session.
-
-    - host: reset session to clean state (new meeting)
-    - audience: join existing session without wiping host state
-    - AI Organizer remains ON by default
+    - host: reset session to clean state
+    - audience: join without wiping state
     """
     if role == "host":
-        result = sm.reset_session(session_id)
+        result = sm.reset_session(session_id)  # Contains host_token
         _ai_mode[session_id] = True
-        _rtc_presence[session_id] = set()
+        async with _get_rtc_lock(session_id):
+            _rtc_presence[session_id] = set()
         cm.clear_context(session_id)
     else:
         result = sm.create_session(session_id)
-        if session_id not in _ai_mode:
-            _ai_mode[session_id] = True
+        _ai_mode.setdefault(session_id, True)
         _rtc_presence.setdefault(session_id, set())
-    await db.save_session(session_id)          # Persist to MongoDB
+
+    asyncio.create_task(_safe_task(db.save_session(session_id), "save_session"))
+    # host_token is included in result for host role — client must store it securely
     return result
 
 
@@ -243,12 +291,47 @@ async def list_sessions():
     return await db.get_all_sessions_from_db()
 
 
+@app.post("/session/{session_id}/metadata")
+async def set_session_metadata(session_id: str, body: SessionMetadataRequest):
+    """
+    Set the host name and meeting topic for this session.
+    These are used by the AI to answer meta-questions like
+    'who is the host?' and 'what is this meeting about?'.
+    """
+    if not sm.get_session(session_id):
+        sm.create_session(session_id)
+
+    result = sm.set_session_metadata(session_id, body.host_name, body.meeting_topic)
+
+    # Also inject metadata into the context manager so it surfaces in AI answers
+    meta_text_parts = []
+    if body.host_name:
+        meta_text_parts.append(f"Host: {body.host_name}")
+    if body.meeting_topic:
+        meta_text_parts.append(f"Meeting topic: {body.meeting_topic}")
+    if meta_text_parts:
+        meta_snippet = ". ".join(meta_text_parts) + "."
+        existing_ctx = cm.has_context(session_id)
+        if existing_ctx:
+            # Prepend meta info to existing context
+            ctx = cm._contexts.get(session_id)
+            if ctx:
+                ctx["full_text"] = meta_snippet + "\n" + ctx.get("full_text", "")
+        else:
+            await asyncio.to_thread(cm.load_text_context, session_id, meta_snippet)
+
+    return result
+
+
+@app.get("/session/{session_id}/metadata")
+async def get_session_metadata(session_id: str):
+    """Get the host name and meeting topic for a session."""
+    return sm.get_session_metadata(session_id)
+
+
 @app.post("/session/{session_id}/rtc-token", response_model=RtcTokenResponse)
 async def issue_rtc_token(session_id: str, body: RtcTokenRequest):
-    """
-    Issue short-lived managed WebRTC token for a room join.
-    Enforces basic role validation and room capacity guard.
-    """
+    """Issue short-lived managed WebRTC token for a room join."""
     role = (body.role or "").strip().lower()
     if role not in ("host", "audience"):
         return JSONResponse(status_code=400, content={"detail": "Invalid role. Use 'host' or 'audience'."})
@@ -256,23 +339,22 @@ async def issue_rtc_token(session_id: str, body: RtcTokenRequest):
     if not sm.get_session(session_id):
         sm.create_session(session_id)
 
-    present = _rtc_presence.setdefault(session_id, set())
     identity = _build_rtc_identity(session_id, role, body.user_id)
 
-    if identity not in present and len(present) >= RTC_MAX_PARTICIPANTS:
-        return JSONResponse(
-            status_code=429,
-            content={"detail": f"Room participant limit reached ({RTC_MAX_PARTICIPANTS})."},
-        )
+    async with _get_rtc_lock(session_id):
+        present = _rtc_presence.setdefault(session_id, set())
+        if identity not in present and len(present) >= RTC_MAX_PARTICIPANTS:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": f"Room participant limit reached ({RTC_MAX_PARTICIPANTS})."},
+            )
 
-    try:
-        token = _issue_livekit_token(session_id, identity, role)
-    except RuntimeError as exc:
-        return JSONResponse(status_code=503, content={"detail": str(exc)})
+        try:
+            token = _issue_livekit_token(session_id, identity, role)
+        except RuntimeError as exc:
+            return JSONResponse(status_code=503, content={"detail": str(exc)})
 
-    # Reserve participant slot at token issuance time to enforce capacity
-    # even before explicit presence callbacks arrive from clients.
-    present.add(identity)
+        present.add(identity)
 
     return RtcTokenResponse(
         token=token,
@@ -285,15 +367,14 @@ async def issue_rtc_token(session_id: str, body: RtcTokenRequest):
 
 @app.post("/session/{session_id}/rtc-presence")
 async def rtc_presence(session_id: str, identity: str, state: str = "join"):
-    """
-    Best-effort presence tracking for capacity guarding and diagnostics.
-    """
-    present = _rtc_presence.setdefault(session_id, set())
-    if state == "leave":
-        present.discard(identity)
-    else:
-        present.add(identity)
-    return {"session_id": session_id, "participants": len(present)}
+    """Best-effort presence tracking for capacity guarding and diagnostics."""
+    async with _get_rtc_lock(session_id):
+        present = _rtc_presence.setdefault(session_id, set())
+        if state == "leave":
+            present.discard(identity)
+        else:
+            present.add(identity)
+    return {"session_id": session_id, "participants": len(_rtc_presence.get(session_id, set()))}
 
 
 # ─────────────────────────────────────────────
@@ -305,39 +386,91 @@ async def submit_question(session_id: str, body: QuestionRequest):
     """
     Submit a question from an attendee.
 
-    AI is always ON:
-      (1) Common/context questions answered by AI (not queued)
-      (2) Duplicates are filtered
-      (3) Unique unresolved questions are queued to host inbox
+    Rules:
+      - Every UNIQUE question always appears in the host inbox.
+      - Semantic duplicates are filtered (attendee gets an informational reply).
+      - AI may auto-answer from context, but never hides unique questions from the host.
     """
     user_status = rw.get_status(body.user_id)
-    user_tier = user_status["tier"]
     total_points = user_status["points"]
-    tier = user_tier
+    tier = user_status["tier"]
     ai_enabled = _ai_mode.get(session_id, True)
-    # Always keep raw attendee submissions for full host inbox when AI is OFF.
-    sm.record_submission(session_id, body.user_id, body.text, user_tier)
+    meta = sm.get_session_metadata(session_id)
 
-    # When AI is ON: check draft/context FIRST. Answer meeting-topic and basic
-    # questions from the draft — even if unique (first time asked).
+    result = await sm.process_question(
+        session_id,
+        body.user_id,
+        body.text,
+        tier,
+        ai_enabled,
+    )
+
+    # Duplicate or limit_reached — return early, nothing goes to host inbox
+    if result["status"] != "unique":
+        return QuestionResponse(
+            status=result["status"],
+            message=result["message"],
+            points_earned=0,
+            total_points=total_points,
+            tier=tier,
+            similarity_score=result.get("similarity_score"),
+        )
+
+    # Unique question — add to host inbox and broadcast
+    question_doc = {
+        "id": result["question_id"],
+        "user_id": body.user_id,
+        "text": body.text,
+        "timestamp": datetime.utcnow().isoformat(),
+        "priority": "priority" if tier in ("pro", "enterprise") else "normal",
+        "starred": False,
+    }
+
+    await ws_manager.broadcast(
+        session_id,
+        {
+            "type": "new_question",
+            "questions": sm.get_questions(session_id),
+        },
+    )
+    asyncio.create_task(_safe_task(db.save_question(session_id, question_doc), "save_question"))
+
+    # AI answer attempt (after question is safely in inbox)
     AI_ANSWER_SUFFIX = "\n\n— Answered by AI"
-    if ai_enabled and cm.has_context(session_id):
-        context_answer = cm.find_answer_in_context(session_id, body.text, threshold=0.32)
+    if ai_enabled:
+        score = 0.0
         answer_text = None
-        if context_answer and context_answer.get("found"):
-            answer_text = await asyncio.to_thread(
-                cm.generate_answer_from_draft,
-                session_id,
-                body.text,
-                context_answer.get("answer", ""),
-            )
-            if not answer_text:
-                # Fallback: never return huge chunks; keep first sentence only.
-                raw = (context_answer.get("answer", "") or "").strip()
-                answer_text = raw.split(".")[0].strip() if raw else None
+
+        if cm.has_context(session_id):
+            context_answer = cm.find_answer_in_context(session_id, body.text, threshold=ANSWER_MATCH_THRESHOLD)
+            score = context_answer.get("score", 0.0) if context_answer else 0.0
+
+            if context_answer and context_answer.get("found"):
+                answer_text = await asyncio.to_thread(
+                    cm.generate_answer_from_draft,
+                    session_id,
+                    body.text,
+                    context_answer.get("answer", ""),
+                    meta.get("host_name"),
+                    meta.get("meeting_topic"),
+                )
+                if not answer_text:
+                    raw = (context_answer.get("answer", "") or "").strip()
+                    answer_text = raw.split(".")[0].strip() if raw else None
+
+            if not answer_text and score >= FALLBACK_GEN_THRESHOLD:
+                answer_text = await asyncio.to_thread(
+                    cm.generate_answer_from_draft,
+                    session_id,
+                    body.text,
+                    None,
+                    meta.get("host_name"),
+                    meta.get("meeting_topic"),
+                )
+
         if not answer_text:
-            # No chunk match — always try Gemini to answer from draft (it will say "wasn't covered" if unrelated)
-            answer_text = await asyncio.to_thread(cm.generate_answer_from_draft, session_id, body.text)
+            answer_text = await asyncio.to_thread(cm.generate_open_answer, body.text)
+
         if answer_text:
             return QuestionResponse(
                 status="context_answered",
@@ -345,85 +478,65 @@ async def submit_question(session_id: str, body: QuestionRequest):
                 points_earned=0,
                 total_points=total_points,
                 tier=tier,
-                similarity_score=context_answer.get("score") if context_answer else None,
+                similarity_score=score or None,
             )
 
-    # Run duplicate detection (only when AI on) and question limit checks.
-    result = await sm.process_question(
-        session_id,
-        body.user_id,
-        body.text,
-        user_tier,
-        ai_enabled,
-    )
-
-    if result["status"] == "unique":
-        question_doc = {
-            "id": result["question_id"],
-            "user_id": body.user_id,
-            "text": body.text,
-            "timestamp": datetime.utcnow().isoformat(),
-            "priority": "priority" if user_tier in ("pro", "enterprise") else "normal",
-            "starred": False,
-        }
-
-        # Broadcast to host inbox
-        await ws_manager.broadcast(
-            session_id,
-            {
-                "type": "new_question",
-                "questions": sm.get_questions(session_id) if ai_enabled else sm.get_all_questions(session_id),
-            },
-        )
-        asyncio.create_task(db.save_question(session_id, question_doc))
-
-    # Fall back to duplicate/unique/limit_reached messaging.
     return QuestionResponse(
-        status=result["status"],
+        status="unique",
         message=result["message"],
-        points_earned=0,  # Points deferred until starred
+        points_earned=0,
         total_points=total_points,
         tier=tier,
         similarity_score=result.get("similarity_score"),
     )
 
+
 @app.post("/session/{session_id}/star")
 async def star_question_endpoint(session_id: str, body: StarQuestionRequest):
     """
-    Host action: Star a question because it's good.
-    This awards the 50 Spark Points to the attendee who asked it.
+    Host action: Star a question.
+    Requires the host_token issued at session start — attendees cannot call this.
+    Awards Spark Points to the attendee who asked it.
     """
+    # Validate host token — reject anyone without it
+    if not validate_host_token(session_id, body.host_token):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Forbidden: only the host can star questions."},
+        )
+
     starred_q = sm.star_question(session_id, body.question_id)
     if not starred_q:
         return {"success": False, "message": "Question not found or already starred"}
-    
-    # Award points to the user who asked it
-    updated_rewards = rw.earn_points(starred_q["user_id"])
-    
-    # Persist the changes
-    await db.save_question(session_id, starred_q)
-    await db.save_user_rewards(starred_q["user_id"], updated_rewards["points"], updated_rewards["tier"])
 
-    # Broadcast updated questions + leaderboard to all connected hosts
+    updated_rewards = rw.earn_points(starred_q["user_id"])
+
+    # Persist both starred question and updated points
+    asyncio.create_task(_safe_task(db.save_question(session_id, starred_q), "save_starred_question"))
+    asyncio.create_task(
+        _safe_task(
+            db.save_user_rewards(starred_q["user_id"], updated_rewards["points"], updated_rewards["tier"]),
+            "save_user_rewards",
+        )
+    )
+
     ai_enabled = _ai_mode.get(session_id, True)
     await ws_manager.broadcast(
         session_id,
         {
             "type": "star",
-            "questions": sm.get_questions(session_id) if ai_enabled else sm.get_all_questions(session_id),
+            "questions": sm.get_questions(session_id) if ai_enabled else sm.get_questions(session_id),
             "leaderboard": rw.get_leaderboard(sm.get_participants(session_id)),
-            # Targeted payload so the attendee whose question was starred
-            # can update their Spark points in real time via WebSockets.
             "user_id": starred_q["user_id"],
             "new_total": updated_rewards["points"],
         },
     )
 
     return {
-        "success": True, 
-        "message": "Question starred and points awarded!", 
+        "success": True,
+        "message": "Question starred and points awarded!",
         "user_id": starred_q["user_id"],
-        "new_total": updated_rewards["points"]
+        "new_total": updated_rewards["points"],
     }
 
 
@@ -431,11 +544,9 @@ async def star_question_endpoint(session_id: str, body: StarQuestionRequest):
 async def get_questions(session_id: str):
     """
     Get all unique, curated questions for a session.
-    HOST DASHBOARD polls this endpoint to display the live question feed.
     Priority questions (Pro/Enterprise users) appear first.
     """
-    ai_enabled = _ai_mode.get(session_id, True)
-    return sm.get_questions(session_id) if ai_enabled else sm.get_all_questions(session_id)
+    return sm.get_questions(session_id)
 
 
 # ─────────────────────────────────────────────
@@ -445,15 +556,10 @@ async def get_questions(session_id: str):
 @app.get("/rewards/{user_id}")
 async def get_rewards(user_id: str):
     """Get a user's Spark Points balance, tier, and benefits."""
-    # Try MongoDB first (persisted), fallback to in-memory
+    # Try to load from DB first so we have the latest persisted value
     db_record = await db.get_user_rewards(user_id)
     if db_record:
-        return {
-            "user_id": db_record.get("user_id", user_id),
-            "points": db_record.get("points", 0),
-            "tier": db_record.get("tier", "basic"),
-            "benefits": rw.TIER_BENEFITS.get(db_record.get("tier", "basic"), rw.TIER_BENEFITS["basic"]),
-        }
+        rw.load_from_db(user_id, db_record.get("points", 0), db_record.get("tier", "basic"))
     return rw.get_status(user_id)
 
 
@@ -468,13 +574,18 @@ async def redeem_rewards(user_id: str, body: RedeemRequest):
     """
     result = rw.redeem_points(user_id, body.tier)
     if result["success"]:
-        await db.save_user_rewards(user_id, result["remaining_points"], result["new_tier"])
+        asyncio.create_task(
+            _safe_task(
+                db.save_user_rewards(user_id, result["remaining_points"], result["new_tier"]),
+                "redeem_save_user_rewards",
+            )
+        )
     return RedeemResponse(**result)
 
 
 @app.get("/session/{session_id}/leaderboard")
 async def get_leaderboard(session_id: str):
-    """Top Spark Points earners in this session — great for gamification!"""
+    """Top Spark Points earners in this session."""
     participants = sm.get_participants(session_id)
     return rw.get_leaderboard(participants)
 
@@ -487,18 +598,18 @@ async def get_leaderboard(session_id: str):
 async def load_video_context(session_id: str, video_id: str):
     """
     Fetch a YouTube transcript and store it as meeting context.
-    Call this when host selects a video. AI uses transcript to auto-answer questions.
+    Runs in a thread to avoid blocking the event loop during embedding computation.
     """
-    return cm.load_youtube_context(session_id, video_id)
+    return await asyncio.to_thread(cm.load_youtube_context, session_id, video_id)
 
 
 @app.post("/session/{session_id}/load-text")
 async def load_text_context_route(session_id: str, text: str):
     """
     Store a manually typed agenda as meeting context.
-    Alternative to video transcript — host pastes their own notes.
+    Runs in a thread to avoid blocking the event loop.
     """
-    return cm.load_text_context(session_id, text)
+    return await asyncio.to_thread(cm.load_text_context, session_id, text)
 
 
 @app.get("/session/{session_id}/context-status")
@@ -509,11 +620,7 @@ async def get_context_status(session_id: str):
 
 @app.post("/session/{session_id}/multimodal-context")
 async def ingest_multimodal_context_route(session_id: str, body: MultimodalContextRequest):
-    """
-    Ingest live multimodal meeting context from host:
-    - audio transcript snippets
-    - video frame snapshot + frame-rate metadata
-    """
+    """Ingest live multimodal meeting context (audio transcript + video frame)."""
     return await asyncio.to_thread(
         cm.ingest_multimodal_context,
         session_id,
@@ -525,10 +632,7 @@ async def ingest_multimodal_context_route(session_id: str, body: MultimodalConte
 
 @app.get("/session/{session_id}/frame-rate")
 async def get_frame_rate(session_id: str):
-    """
-    Real-time frame-rate telemetry for the active meeting camera stream.
-    No UI change required; can be consumed by monitoring/tools.
-    """
+    """Real-time frame-rate telemetry for the active meeting camera stream."""
     return cm.get_frame_rate_stats(session_id)
 
 
@@ -536,6 +640,7 @@ async def get_frame_rate(session_id: str):
 async def debug_session(session_id: str):
     """Diagnostic: current AI state, context, and question count for troubleshooting."""
     questions = sm.get_questions(session_id)
+    meta = sm.get_session_metadata(session_id)
     return {
         "session_id": session_id,
         "ai_enabled": _ai_mode.get(session_id, True),
@@ -544,18 +649,22 @@ async def debug_session(session_id: str):
         "context_chunk_count": len(cm._contexts.get(session_id, {}).get("chunks", [])),
         "frame_rate": cm.get_frame_rate_stats(session_id),
         "rtc_participants": len(_rtc_presence.get(session_id, set())),
+        "host_name": meta.get("host_name"),
+        "meeting_topic": meta.get("meeting_topic"),
     }
 
 
 @app.post("/session/{session_id}/ai-mode")
 async def set_ai_mode(session_id: str, body: AIModeRequest):
     """
-    Backward-compatible endpoint.
-    AI Organizer is now fixed ON by design.
+    Toggle the AI Organizer for a session.
+    When enabled=True, reprocesses existing inbox to apply AI filtering.
     """
-    _ai_mode[session_id] = True
-    stats = await _reprocess_existing_inbox_with_ai(session_id)
-    return {"session_id": session_id, "ai_enabled": True, "reprocess": stats}
+    _ai_mode[session_id] = body.enabled
+    stats = {}
+    if body.enabled:
+        stats = await _reprocess_existing_inbox_with_ai(session_id)
+    return {"session_id": session_id, "ai_enabled": body.enabled, "reprocess": stats}
 
 
 @app.get("/session/{session_id}/ai-mode")
@@ -579,10 +688,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
     Attendees listen for:
       - type: "star" with their user_id → points earned notification
+      - type: "ai_resolution" with their user_id → AI answered their question
     """
     await ws_manager.connect(session_id, websocket)
     try:
-        # Keep the connection open; we don't expect messages from clients right now
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:

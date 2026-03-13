@@ -4,18 +4,19 @@ import HostDashboard from './components/HostDashboard'
 import AudienceView from './components/AudienceView'
 import WebCamVideo from './components/WebCamVideo'
 
-const API_URL = `${window.location.protocol}//${window.location.hostname}:8000`
+// Prefer environment variable for deployed environments (Base44, etc.),
+// but fall back to local backend in dev.
+const API_URL =
+  import.meta.env.VITE_API_URL ||
+  `${window.location.protocol}//${window.location.hostname}:8000`
 
 function App() {
   const [inMeeting, setInMeeting] = useState(false)
-  const [role, setRole] = useState('audience') // 'audience' | 'host'
+  const [role, setRole] = useState('audience')
+  const [hostToken, setHostToken] = useState(null) // Secret issued by server to host only
   const [sessionId, setSessionId] = useState(() => {
-    const key = 'lumina_meeting_id'
-    const existing = window.localStorage.getItem(key)
-    if (existing) return existing
-    const generated = `room-${Math.floor(Math.random() * 100000)}`
-    window.localStorage.setItem(key, generated)
-    return generated
+    // Remember last meeting code on this device for convenience.
+    return window.localStorage.getItem('lumina_meeting_id') || ''
   })
   const [isCameraOn, setIsCameraOn] = useState(false)
   const [isMuted, setIsMuted] = useState(true)
@@ -27,7 +28,8 @@ function App() {
     const key = 'lumina_rtc_user_id'
     const existing = window.localStorage.getItem(key)
     if (existing) return existing
-    const created = 'rtc_' + Math.floor(Math.random() * 100000)
+    // Use crypto.randomUUID() for guaranteed uniqueness (no collision risk)
+    const created = 'rtc_' + (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2))
     window.localStorage.setItem(key, created)
     return created
   })
@@ -74,21 +76,31 @@ function App() {
   }, [isCompactLayout])
   
   const startMeeting = async (selectedRole) => {
-    let targetSessionId = sessionId
+    let targetId = (sessionId || '').trim()
 
-    // When host starts a meeting, generate a fresh auto ID and store it.
-    if (selectedRole === 'host') {
-      const key = 'lumina_meeting_id'
+    // If host starts without a code, auto-generate one they can share.
+    if (selectedRole === 'host' && !targetId) {
       const freshId = `room-${Date.now().toString(36)}-${Math.floor(Math.random() * 9999)}`
-      targetSessionId = freshId
+      targetId = freshId
       setSessionId(freshId)
-      window.localStorage.setItem(key, freshId)
+      window.localStorage.setItem('lumina_meeting_id', freshId)
+    }
+
+    // Audience (or host) must have a meeting code.
+    if (!targetId) {
+      alert('Enter a meeting code first.')
+      return
     }
 
     try {
-      await fetch(`${API_URL}/session/${targetSessionId}/start?role=${selectedRole}`, { method: 'POST' })
+      const res = await fetch(`${API_URL}/session/${targetId}/start?role=${selectedRole}`, { method: 'POST' })
+      if (res.ok) {
+        const data = await res.json()
+        // Server returns host_token only for the host role — store it for star requests
+        if (data.host_token) setHostToken(data.host_token)
+      }
     } catch(e) {
-      console.warn("Backend not running or CORS issue", e)
+      console.warn('Backend not running or CORS issue', e)
     }
     setRole(selectedRole)
     setInMeeting(true)
@@ -108,9 +120,20 @@ function App() {
           </div>
           
           <div className="space-y-4">
-            <div className="text-left">
-              <label className="block text-xs uppercase tracking-wider text-[var(--text-secondary)] mb-2 font-semibold">Join As</label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+            <div className="text-left space-y-4">
+              <div>
+                <label className="block text-xs uppercase tracking-wider text-[var(--text-secondary)] mb-2 font-semibold">Meeting code</label>
+                <input
+                  type="text"
+                  value={sessionId}
+                  onChange={e => setSessionId(e.target.value)}
+                  placeholder="e.g. room-abc123 or your custom name"
+                  className="w-full glass-input rounded-xl px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs uppercase tracking-wider text-[var(--text-secondary)] mb-2 font-semibold">Join As</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <button 
                   onClick={() => startMeeting('audience')}
                   className="flex-1 bg-[rgba(255,255,255,0.03)] border border-[var(--border-subtle)] hover:border-blue-500/50 hover:bg-blue-500/10 py-3 rounded-xl transition-all font-medium"
@@ -123,6 +146,7 @@ function App() {
                 >
                   🎤 Host
                 </button>
+                </div>
               </div>
             </div>
             
@@ -157,7 +181,22 @@ function App() {
             <span className="font-semibold text-blue-400">{role === 'host' ? 'Host / Presenter' : 'Attendee'}</span>
             <span className="ml-3 text-xs text-slate-400 font-mono truncate max-w-[160px]">ID: {sessionId}</span>
           </div>
-          <button onClick={() => { setInMeeting(false) }} className={`${isCompactLayout ? 'text-xs px-2 py-1 rounded border border-red-400/30' : 'text-sm'} text-red-400 hover:text-red-300 transition-colors`}>
+          <button
+            onClick={async () => {
+              // Notify server so the RTC slot is freed
+              try {
+                const identity = role === 'host' ? `host_${sessionId}` : `audience_${rtcUserId}`
+                await fetch(
+                  `${API_URL}/session/${sessionId}/rtc-presence?identity=${encodeURIComponent(identity)}&state=leave`,
+                  { method: 'POST' }
+                )
+              } catch (e) {
+                console.warn('Failed to send leave presence', e)
+              }
+              setInMeeting(false)
+            }}
+            className={`${isCompactLayout ? 'text-xs px-2 py-1 rounded border border-red-400/30' : 'text-sm'} text-red-400 hover:text-red-300 transition-colors`}
+          >
             Leave
           </button>
         </div>
@@ -233,6 +272,7 @@ function App() {
             <HostDashboard
               sessionId={sessionId}
               apiUrl={API_URL}
+              hostToken={hostToken}
             />
           ) : (
             <AudienceView sessionId={sessionId} apiUrl={API_URL} />

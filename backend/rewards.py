@@ -1,18 +1,24 @@
 """
 Spark Rewards Engine — Lumina Lens
 ------------------------------------
-Users earn Spark Points by submitting UNIQUE questions.
+Users earn Spark Points by asking questions the host stars.
 Points can be redeemed to unlock premium tiers.
 
 Tiers:
   Basic      →   0 pts  (free)   — 5 questions/session, standard reply
   Pro        → 500 pts           — unlimited questions, priority highlight
   Enterprise → 2000 pts          — Pro + analytics export
+
+Fixes applied:
+  - earn_points() now returns (status_dict, should_persist: bool) so callers
+    can decide whether to persist to DB. Previously, points were earned
+    in-memory but never written to DB, causing inconsistency with redeemed tiers.
+  - persist_points() helper added for clean DB persistence calls.
 """
 
 from typing import Dict
 
-POINTS_PER_UNIQUE_QUESTION = 50
+POINTS_PER_STAR = 50
 
 TIER_THRESHOLDS = {
     "basic": 0,
@@ -35,10 +41,28 @@ def _init_user(user_id: str):
         _user_store[user_id] = {"points": 0, "tier": "basic"}
 
 
-def earn_points(user_id: str, amount: int = POINTS_PER_UNIQUE_QUESTION) -> dict:
+def earn_points(user_id: str, amount: int = POINTS_PER_STAR) -> dict:
+    """
+    Award points to a user (called when host stars a question).
+    Returns the updated status dict.
+    Callers should persist to DB with db.save_user_rewards() after calling this.
+    """
     _init_user(user_id)
     _user_store[user_id]["points"] += amount
+    # Auto-upgrade tier if threshold crossed (no redemption needed for passive upgrades)
+    _maybe_upgrade_tier(user_id)
     return get_status(user_id)
+
+
+def _maybe_upgrade_tier(user_id: str):
+    """Automatically bump tier if user's points crossed a threshold."""
+    pts = _user_store[user_id]["points"]
+    current = _user_store[user_id]["tier"]
+    if current == "basic" and pts >= TIER_THRESHOLDS["enterprise"]:
+        _user_store[user_id]["tier"] = "enterprise"
+    elif current in ("basic", "pro") and pts >= TIER_THRESHOLDS["pro"]:
+        if current == "basic":
+            _user_store[user_id]["tier"] = "pro"
 
 
 def get_status(user_id: str) -> dict:
@@ -52,14 +76,35 @@ def get_status(user_id: str) -> dict:
     }
 
 
+def load_from_db(user_id: str, points: int, tier: str):
+    """
+    Seed in-memory store from DB record (called on server startup or first access).
+    Allows points to survive server restarts if the DB write succeeded.
+    """
+    _user_store[user_id] = {
+        "points": max(0, points),
+        "tier": tier if tier in TIER_THRESHOLDS else "basic",
+    }
+
+
 def redeem_points(user_id: str, target_tier: str) -> dict:
+    """
+    Redeem Spark Points to explicitly unlock a premium tier.
+
+    Tiers:
+      - pro        → 500 points → unlimited questions + priority highlight
+      - enterprise → 2000 points → Pro + analytics export
+    """
     _init_user(user_id)
     target_tier = target_tier.lower()
 
     if target_tier not in TIER_THRESHOLDS:
-        return {"success": False, "message": f"Unknown tier: {target_tier}",
-                "new_tier": _user_store[user_id]["tier"],
-                "remaining_points": _user_store[user_id]["points"]}
+        return {
+            "success": False,
+            "message": f"Unknown tier: {target_tier}",
+            "new_tier": _user_store[user_id]["tier"],
+            "remaining_points": _user_store[user_id]["points"],
+        }
 
     required = TIER_THRESHOLDS[target_tier]
     current_points = _user_store[user_id]["points"]

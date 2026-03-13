@@ -1,12 +1,22 @@
 import json
 import asyncio
+import time
+import os
 from typing import Dict, List
 from fastapi import WebSocket
 import redis.asyncio as redis
+from dotenv import load_dotenv
 
-# Optional Redis client for scalable Pub/Sub. 
-# It will gracefully fallback to local memory if Redis isn't running.
-redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
+# Read Redis URL from environment (supports rediss:// for TLS, e.g. Upstash)
+# Falls back to localhost if REDIS_URL is not set.
+_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+redis_client = redis.from_url(_REDIS_URL, decode_responses=True)
+
+# How often (seconds) to re-probe Redis after initial state is known.
+_REDIS_RECHECK_INTERVAL = 30.0
+
 
 class ConnectionManager:
     def __init__(self):
@@ -14,27 +24,30 @@ class ConnectionManager:
         self.pubsub_tasks: Dict[str, asyncio.Task] = {}
         # None = unknown, True = reachable, False = unreachable
         self.redis_available: bool | None = None
+        self._redis_check_ts: float = 0.0
 
     async def _ensure_redis_availability(self) -> bool:
         """
         Determine whether Redis is reachable.
-        Cached after first check to avoid repeated ping timeouts during broadcasts.
+        Re-checked every _REDIS_RECHECK_INTERVAL seconds so that a
+        mid-session Redis failure is detected and local fallback kicks in.
         """
-        if self.redis_available is not None:
-            return self.redis_available
-        try:
-            await redis_client.ping()
-            self.redis_available = True
-        except Exception:
-            self.redis_available = False
+        now = time.monotonic()
+        if self.redis_available is None or (now - self._redis_check_ts) > _REDIS_RECHECK_INTERVAL:
+            try:
+                await asyncio.wait_for(redis_client.ping(), timeout=1.0)
+                self.redis_available = True
+            except Exception:
+                self.redis_available = False
+            self._redis_check_ts = now
         return self.redis_available
 
     async def connect(self, session_id: str, websocket: WebSocket):
         await websocket.accept()
         if session_id not in self.active_connections:
             self.active_connections[session_id] = []
-            
-            # Start a Redis subscriber for this session
+
+            # Start a Redis subscriber for this session if Redis is available
             try:
                 if not await self._ensure_redis_availability():
                     raise RuntimeError("Redis unavailable")
@@ -43,9 +56,9 @@ class ConnectionManager:
                 task = asyncio.create_task(self._listen_to_redis(session_id, pubsub))
                 self.pubsub_tasks[session_id] = task
             except Exception:
-                # If Redis is not running locally, that's fine for MVP
+                # Redis not running — fine for MVP; local broadcast still works
                 pass
-        
+
         self.active_connections[session_id].append(websocket)
 
     def disconnect(self, session_id: str, websocket: WebSocket):
@@ -70,16 +83,16 @@ class ConnectionManager:
             pass
 
     async def broadcast(self, session_id: str, message: dict):
-        """Broadcast either via Redis (so all nodes see it) or locally."""
+        """Broadcast either via Redis pub/sub (multi-node) or locally (single-node fallback)."""
         if await self._ensure_redis_availability():
             try:
                 await redis_client.publish(f"session:{session_id}", json.dumps(message))
                 return
             except Exception:
-                # Redis went away after initial success; disable and fall back locally.
+                # Redis dropped mid-session — mark as unavailable and fall through
                 self.redis_available = False
+                self._redis_check_ts = 0.0  # Force re-check next time
 
-        # Fallback to local broadcast if Redis is unreachable
         await self._broadcast_local(session_id, message)
 
     async def _broadcast_local(self, session_id: str, message: dict):
@@ -89,5 +102,6 @@ class ConnectionManager:
                     await connection.send_json(message)
                 except Exception:
                     self.disconnect(session_id, connection)
+
 
 ws_manager = ConnectionManager()
