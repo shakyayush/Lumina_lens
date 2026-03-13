@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lumina Lens — AI Meeting Assistant</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* ✨ New Blue & White Theme ✨ */
+    --bg: #ffffff;
+    --surface: #f8fafc;
+    --surface2: #f1f5f9;
+    --border: #e2e8f0;
+    --accent: #2563eb;       /* Royal Blue */
+    --accent2: #0ea5e9;      /* Sky Blue */
+    --gold: #f59e0b;
+    --green: #10b981;
+    --red: #ef4444;
+    --text: #0f172a;         /* Dark Navy */
+    --text2: #475569;        /* Medium Slate */
+    --radius: 12px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── TOP NAV HEADER ─────────────────────────────── */
+  header {
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+  }
+
+  .nav-logo {
+    font-size: 1.5rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    cursor: pointer;
+  }
+
+  .nav-links {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+
+  .nav-btn {
+    background: transparent;
+    border: none;
+    color: var(--text2);
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 8px 16px;
+    border-radius: 8px;
+    transition: all 0.2s;
+  }
+
+  .nav-btn:hover {
+    background: var(--surface2);
+    color: var(--accent);
+  }
+
+  .nav-btn-primary {
+    background: var(--accent);
+    color: white;
+  }
+
+  .nav-btn-primary:hover {
+    background: #1d4ed8;
+    color: white;
+  }
+
+  /* ── LANDING VIEW ─────────────────────────────── */
+  #landing {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    background: radial-gradient(ellipse at 50% 0%, rgba(37, 99, 235, 0.08) 0%, transparent 70%);
+  }
+
+  .hero-title {
+    font-size: 3.5rem;
+    font-weight: 800;
+    color: var(--text);
+    margin-bottom: 16px;
+    text-align: center;
+    line-height: 1.2;
+  }
+
+  .hero-tagline {
+    color: var(--text2);
+    font-size: 1.25rem;
+    margin-bottom: 40px;
+    text-align: center;
+    max-width: 600px;
+  }
+
+  .cta-btn {
+    padding: 16px 32px;
+    font-size: 1.1rem;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: white;
+    border: none;
+    border-radius: 30px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 10px 25px rgba(37, 99, 235, 0.3);
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+
+  .cta-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 15px 35px rgba(37, 99, 235, 0.4);
+  }
+
+  /* ── SETUP VIEW (Uploads) ───────────────────────── */
+  #setup {
+    display: none;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    background: var(--surface);
+  }
+
+  .setup-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 40px;
+    width: 100%;
+    max-width: 600px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.05);
+  }
+
+  .setup-header {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: var(--text);
+  }
+
+  .setup-sub {
+    color: var(--text2);
+    font-size: 0.95rem;
+    margin-bottom: 30px;
+  }
+
+  .form-group {
+    margin-bottom: 24px;
+    text-align: left;
+  }
+
+  .form-label {
+    display: block;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+
+  .form-input {
+    width: 100%;
+    padding: 12px 16px;
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    transition: border-color 0.2s;
+  }
+
+  .form-input:focus {
+    border-style: solid;
+    border-color: var(--accent);
+    outline: none;
+  }
+
+  textarea.form-input {
+    resize: vertical;
+    min-height: 120px;
+    border-style: solid;
+    border-width: 1px;
+  }
+
+  .error-text {
+    color: var(--red);
+    font-size: 0.8rem;
+    margin-top: 6px;
+    display: none;
+  }
+
+  .start-session-btn {
+    width: 100%;
+    padding: 16px;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .start-session-btn:hover { background: #1d4ed8; }
+  .start-session-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+  /* ── MEETING VIEW ─────────────────────────── */
+  #meeting { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+
+  .session-topbar {
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .session-badge {
+    font-size: 0.8rem;
+    color: var(--accent);
+    background: rgba(37,99,235,0.1);
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-weight: 600;
+  }
+
+  .live-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    background: var(--accent);
+    border-radius: 50%;
+    margin-right: 6px;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(0.85); }
+  }
+
+  .panels {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr 1fr;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── VIDEO PANEL ─── */
+  .video-panel {
+    background: #000;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+  }
+
+  .video-label {
+    padding: 10px 16px;
+    font-size: 0.8rem;
+    color: var(--text2);
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* ── ATTENDEE PANEL ─── */
+  .attendee-panel {
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+  }
+
+  .panel-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .panel-title {
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text);
+  }
+
+  .points-bar {
+    margin-top: 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .points-val {
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: var(--gold);
+  }
+
+  .tier-badge {
+    font-size: 0.7rem;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .tier-basic { background: #e2e8f0; color: #475569; }
+  .tier-pro { background: rgba(37,99,235,0.15); color: #2563eb; }
+  .tier-enterprise { background: rgba(245,158,11,0.2); color: #d97706; }
+
+  .chat-area {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--surface);
+  }
+
+  .msg {
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    animation: fadeIn 0.3s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  .msg-unique { background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2); color: #059669; }
+  .msg-duplicate { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2); color: #dc2626; }
+  .msg-context { background: rgba(14,165,233,0.1); border: 1px solid rgba(14,165,233,0.2); color: #0284c7; }
+  .msg-q { background: var(--bg); border: 1px solid var(--border); color: var(--text); font-style: italic; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
+
+  .input-area {
+    padding: 16px;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  .user-id-row { display: flex; gap: 8px; margin-bottom: 10px; }
+  .q-row { display: flex; gap: 8px; }
+
+  .input-field {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 12px;
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    font-size: 0.85rem;
+    outline: none;
+  }
+
+  .input-field:focus { border-color: var(--accent); background: var(--bg); }
+
+  .send-btn {
+    padding: 10px 18px;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .send-btn:hover { background: #1d4ed8; }
+  .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── HOST DASHBOARD ─── */
+  .host-panel {
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .q-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .q-item {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+  }
+
+  .q-text { font-size: 0.9rem; color: var(--text); line-height: 1.5; margin-bottom: 6px; }
+  .q-meta { font-size: 0.75rem; color: var(--text2); display: flex; gap: 10px; align-items: center; }
+
+  .leaderboard {
+    border-top: 1px solid var(--border);
+    padding: 14px 16px;
+    background: var(--bg);
+  }
+
+  .lb-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text2);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  .lb-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 0;
+    font-size: 0.82rem;
+    border-bottom: 1px solid var(--surface);
+  }
+
+  .lb-rank { color: var(--text2); width: 24px; font-weight: 700; }
+  .lb-user { flex: 1; color: var(--text); font-weight: 500; }
+  .lb-pts { color: var(--gold); font-weight: 700; }
+
+  .empty-state {
+    color: var(--text2);
+    font-size: 0.9rem;
+    text-align: center;
+    padding: 40px 20px;
+  }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+</style>
+</head>
+<body>
+
+<!-- ── HEADER NAV ── -->
+<header>
+  <div class="nav-logo" onclick="location.reload()">🔍 Lumina Lens</div>
+  <div class="nav-links">
+    <button class="nav-btn">Profile</button>
+    <button class="nav-btn">Settings</button>
+    <button class="nav-btn nav-btn-primary" onclick="showSetup()">Start Meeting</button>
+  </div>
+</header>
+
+<!-- ── LANDING VIEW ── -->
+<div id="landing">
+  <div class="hero-title">Meetings, minus the noise.</div>
+  <div class="hero-tagline">
+    Lumina Lens uses AI to automatically answer repeat questions, filter duplicates, and reward your attendees for engaging content.
+  </div>
+  <button class="cta-btn" onclick="showSetup()">Create a New Session</button>
+</div>
+
+<!-- ── SETUP VIEW (Uploads) ── -->
+<div id="setup">
+  <div class="setup-card">
+    <div class="setup-header">Configure Session</div>
+    <div class="setup-sub">Select your meeting video and provide AI context.</div>
+
+    <div class="form-group">
+      <label class="form-label">1. Video Source (Local File)</label>
+      <input type="file" id="video-upload" accept="video/mp4,video/webm,video/ogg" class="form-input">
+      <div id="vid-error" class="error-text">Please select a video file.</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">2. Topic Draft / Meeting Agenda</label>
+      <textarea id="draft-topic" class="form-input" placeholder="Paste the meeting agenda, script, or topic notes here. Our AI will read this to automatically answer attendee questions..."></textarea>
+      <div id="draft-error" class="error-text">Please provide a topic draft.</div>
+    </div>
+
+    <button id="start-btn" class="start-session-btn" onclick="initSession()">Start Session</button>
+  </div>
+</div>
+
+<!-- ── MEETING VIEW ── -->
+<div id="meeting">
+  <div class="session-topbar">
+    <div class="session-badge"><span class="live-dot"></span> Live Session: <span id="session-name-label">Offline Video</span></div>
+  </div>
+
+  <div class="panels">
+    <!-- VIDEO -->
+    <div class="video-panel">
+      <video id="local-vid" style="width:100%; height:100%; object-fit:contain; background:#000;" controls autoplay></video>
+      <div class="video-label">
+        🎥 Local Video Player
+        <span style="margin-left:auto; color: var(--accent);" id="ctx-status">Loading context…</span>
+      </div>
+    </div>
+
+    <!-- ATTENDEE -->
+    <div class="attendee-panel">
+      <div class="panel-header">
+        <div class="panel-title">👤 Attendee</div>
+        <div class="points-bar">
+          <div>
+            <div style="font-size:0.7rem; color:var(--text2); margin-bottom:2px;">Spark Points</div>
+            <div class="points-val" id="points-display">0 ⭐</div>
+          </div>
+          <div>
+            <div style="font-size:0.7rem; color:var(--text2); margin-bottom:4px;">Your Tier</div>
+            <span class="tier-badge tier-basic" id="tier-badge">Basic</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-area" id="chat-area">
+        <div class="empty-state">Ask a question about the meeting.<br>Unique questions earn <strong style="color:var(--gold)">+50 Spark Points</strong> ⭐</div>
+      </div>
+
+      <div class="input-area">
+        <div class="user-id-row">
+          <input class="input-field" id="user-id" placeholder="Your name / ID" value="attendee1">
+        </div>
+        <div class="q-row">
+          <input class="input-field" id="question-input" placeholder="Type your question…" onkeydown="if(event.key==='Enter') sendQuestion()">
+          <button class="send-btn" id="send-btn" onclick="sendQuestion()">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- HOST DASHBOARD -->
+    <div class="host-panel">
+      <div class="panel-header">
+        <div class="panel-title">🖥️ Host Dashboard</div>
+        <div style="font-size:0.75rem; color:var(--text2); margin-top:4px;">Only unique questions appear here</div>
+      </div>
+
+      <div class="q-list" id="q-list">
+        <div class="empty-state">No questions yet.<br>Curated questions will appear here in real-time.</div>
+      </div>
+
+      <div class="leaderboard">
+        <div class="lb-title">⭐ Spark Leaderboard</div>
+        <div id="leaderboard-rows">
+          <div style="font-size:0.8rem; color:var(--text2);">No participants yet</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const API = 'http://localhost:8000';
+  let sessionId = '';
+  let pollInterval = null;
+  let lbInterval = null;
+
+  // ── Flow Control ─────────────────────────────────────────────────────────
+  function showSetup() {
+    document.getElementById('landing').style.display = 'none';
+    document.getElementById('setup').style.display = 'flex';
+  }
+
+  async function initSession() {
+    const vidFile = document.getElementById('video-upload').files[0];
+    const draftText = document.getElementById('draft-topic').value.trim();
+    
+    // Validation
+    let valid = true;
+    if (!vidFile) { document.getElementById('vid-error').style.display = 'block'; valid = false; }
+    else { document.getElementById('vid-error').style.display = 'none'; }
+    if (!draftText) { document.getElementById('draft-error').style.display = 'block'; valid = false; }
+    else { document.getElementById('draft-error').style.display = 'none'; }
+    
+    if (!valid) return;
+
+    // UI Loading state
+    const btn = document.getElementById('start-btn');
+    btn.disabled = true;
+    btn.textContent = 'Configuring Space...';
+
+    sessionId = 'session-' + Date.now();
+
+    // 1. Load Local Video
+    const videoUrl = URL.createObjectURL(vidFile);
+    document.getElementById('local-vid').src = videoUrl;
+    document.getElementById('session-name-label').textContent = 'Local File Session';
+
+    try {
+      // 2. Start Session on Backend
+      await fetch(`${API}/session/${sessionId}/start`, { method: 'POST' });
+
+      // 3. Upload text context to AI
+      const ctxRes = await fetch(`${API}/session/${sessionId}/load-text?text=${encodeURIComponent(draftText)}`, { method: 'POST' });
+      const ctxData = await ctxRes.json();
+      
+      if (ctxData.status === 'loaded') {
+        document.getElementById('ctx-status').textContent = `✅ AI Draft Indexed (${ctxData.chunks_indexed} sections)`;
+      } else {
+        document.getElementById('ctx-status').textContent = '⚠️ AI Context failed';
+      }
+    } catch (e) {
+      console.error(e);
+      document.getElementById('ctx-status').textContent = '⚠️ Backend unreachable';
+    }
+
+    // Switch to Meeting View
+    document.getElementById('setup').style.display = 'none';
+    const meetingEl = document.getElementById('meeting');
+    meetingEl.style.display = 'flex';
+
+    // Connect to WebSocket for real-time updates
+    const wsUrl = API.replace('http', 'ws') + `/session/${sessionId}/ws`;
+    const ws = new WebSocket(wsUrl);
+    
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'new_question' || data.type === 'star') {
+        renderQuestionsList(data.questions);
+      }
+      if (data.type === 'star' && data.leaderboard) {
+        renderLeaderboard(data.leaderboard);
+      }
+    };
+
+    // Load initial data once
+    pollQuestions();
+    pollLeaderboard();
+  }
+
+  // ── Send Question ─────────────────────────────────────────────────────────
+  async function sendQuestion() {
+    const input = document.getElementById('question-input');
+    const userId = document.getElementById('user-id').value.trim() || 'attendee1';
+    const text = input.value.trim();
+    if (!text) return;
+
+    const btn = document.getElementById('send-btn');
+    btn.disabled = true;
+    btn.textContent = '…';
+    input.value = '';
+
+    addChatMsg(text, 'msg-q');
+
+    try {
+      const res = await fetch(`${API}/session/${sessionId}/question`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, text }),
+      });
+      const data = await res.json();
+
+      let cls = 'msg-unique';
+      if (data.status === 'duplicate') {
+        cls = 'msg-duplicate';
+      } else if (data.status === 'context_answered') {
+        cls = 'msg-context';
+      } else if (data.status === 'limit_reached') {
+        cls = 'msg-limit';
+      } else {
+        // Unique
+        data.message += " (Points will be awarded if the Host stars it!)";
+      }
+
+      addChatMsg(data.message, cls);
+
+      document.getElementById('points-display').textContent = data.total_points + ' ⭐';
+      updateTierBadge(data.tier);
+      pollLeaderboard();
+    } catch(e) {
+      addChatMsg('⚠️ Could not reach server. Is backend running?', 'msg-duplicate');
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Send';
+  }
+
+  // ── Data Fetching & Rendering ─────────────────────────────────────────────
+  async function pollQuestions() {
+    try {
+      const res = await fetch(`${API}/session/${sessionId}/questions`);
+      const questions = await res.json();
+      renderQuestionsList(questions);
+    } catch(e) {}
+  }
+
+  function renderQuestionsList(questions) {
+    const list = document.getElementById('q-list');
+    if (!questions || !questions.length) {
+      list.innerHTML = '';
+      return;
+    }
+
+    list.innerHTML = questions.map((q, i) => `
+      <div class="q-item">
+        <div class="q-text">${escHtml(q.text)}</div>
+        <div class="q-meta">
+          <span>👤 ${escHtml(q.user_id)}</span>
+          ${q.starred 
+            ? '<span style="color:var(--gold); font-weight:bold; margin-left:10px;">⭐ Starred (+50 pts)</span>' 
+            : `<button onclick="starQuestion('${q.id}')" style="margin-left:10px; padding:2px 6px; font-size:0.7em; cursor:pointer; background:var(--surface2); border:1px solid var(--border); border-radius:4px; color:var(--text);">Star</button>`}
+          <span style="margin-left:auto">#${i + 1}</span>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  async function starQuestion(qId) {
+    try {
+      const res = await fetch(`${API}/session/${sessionId}/star`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question_id: qId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        addChatMsg(`Host starred a question! ${data.user_id} earned +50 ⭐`, 'msg-unique');
+        // WebSocket will automatically broadcast the update to everyone!
+      }
+    } catch(e) { console.error('Error starring question', e); }
+  }
+
+  async function pollLeaderboard() {
+    try {
+      const res = await fetch(`${API}/session/${sessionId}/leaderboard`);
+      const board = await res.json();
+      renderLeaderboard(board);
+    } catch(e) {}
+  }
+
+  function renderLeaderboard(board) {
+    const medals = ['🥇', '🥈', '🥉'];
+    const container = document.getElementById('leaderboard-rows');
+    if (!board || !board.length) {
+      container.innerHTML = '';
+      return;
+    }
+    container.innerHTML = board.slice(0, 5).map((e, i) => `
+      <div class="lb-row">
+        <span class="lb-rank">${medals[i] || (i+1)}</span>
+        <span class="lb-user">${escHtml(e.user_id)}</span>
+        <span class="lb-pts">${e.points} ⭐</span>
+      </div>
+    `).join('');
+  }
+
+  // ── Utils ─────────────────────────────────────────────────────────────────
+  function addChatMsg(text, cls) {
+    const area = document.getElementById('chat-area');
+    const empty = area.querySelector('.empty-state');
+    if (empty) empty.remove();
+    const div = document.createElement('div');
+    div.className = `msg ${cls}`;
+    div.textContent = text;
+    area.appendChild(div);
+    area.scrollTop = area.scrollHeight;
+  }
+
+  function updateTierBadge(tier) {
+    const badge = document.getElementById('tier-badge');
+    badge.className = 'tier-badge tier-' + tier;
+    badge.textContent = tier.charAt(0).toUpperCase() + tier.slice(1);
+  }
+
+  function escHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+</script>
+</body>
+</html>

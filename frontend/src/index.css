@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Soft light theme with blue accents */
+    --bg-main: #F3F4F6; /* light slate */
+    --bg-panel: rgba(255, 255, 255, 0.9);
+    --border-subtle: rgba(15, 23, 42, 0.08);
+
+    --brand-blue: #2563EB;
+    --brand-glow: rgba(37, 99, 235, 0.35);
+
+    --text-primary: #0F172A;   /* slate-900 */
+    --text-secondary: #64748B; /* slate-500 */
+
+    --accent-gold: #FBBF24;    /* softer amber */
+  }
+
+  body {
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden; /* App view shouldn't scroll globally */
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    background: var(--bg-panel);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border-subtle);
+    box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+  }
+  
+  .glass-input {
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    transition: all 0.2s ease;
+  }
+  
+  .glass-input:focus {
+    outline: none;
+    border-color: var(--brand-blue);
+    box-shadow: 0 0 0 2px var(--brand-glow);
+  }
+  
+  .btn-primary {
+    background: linear-gradient(135deg, #2563EB 0%, #3B82F6 100%);
+    color: white;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 14px 0 rgba(37, 99, 235, 0.39);
+  }
+  
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
+  }
+  
+  .btn-primary:active {
+    transform: translateY(1px);
+  }
+  
+  /* Custom Scrollbar for Chat/Lists */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: var(--border-subtle);
+    border-radius: 10px;
+  }
+}
+
+/* Animations */
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-in {
+  animation: slideIn 0.3s ease forwards;
+}
+
+@keyframes pulse-glow {
+  0% { box-shadow: 0 0 0 0 var(--brand-glow); }
+  70% { box-shadow: 0 0 0 10px rgba(59, 130, 246, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s infinite;
+}

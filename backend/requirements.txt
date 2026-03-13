@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+sentence-transformers
+numpy
+pydantic
+motor
+pymongo
+youtube-transcript-api
+faiss-cpu
+redis
+python-dotenv
+google-genai
