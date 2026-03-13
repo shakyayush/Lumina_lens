@@ -28,6 +28,12 @@
   }
 }
 
+@media (max-width: 1024px) {
+  body {
+    overflow: auto;
+  }
+}
+
 @layer utilities {
   .glass-panel {
     background: var(--bg-panel);

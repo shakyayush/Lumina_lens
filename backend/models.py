@@ -36,3 +36,22 @@ class StarQuestionRequest(BaseModel):
 
 class AIModeRequest(BaseModel):
     enabled: bool
+
+
+class MultimodalContextRequest(BaseModel):
+    transcript: Optional[str] = None
+    frame_data_url: Optional[str] = None
+    frame_rate: Optional[float] = None
+
+
+class RtcTokenRequest(BaseModel):
+    role: str  # "host" | "audience"
+    user_id: Optional[str] = None
+
+
+class RtcTokenResponse(BaseModel):
+    token: str
+    ws_url: str
+    room_name: str
+    identity: str
+    role: str

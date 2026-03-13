@@ -37,10 +37,15 @@ db = None
 async def connect_db():
     """Call this once when the FastAPI server starts up."""
     global client, db
-    client = AsyncIOMotorClient(MONGO_URI)
-    db = client[DB_NAME]
-    # Use plain ASCII to avoid encoding issues on some terminals
-    print(f"Connected to MongoDB: {DB_NAME}")
+    try:
+        client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        db = client[DB_NAME]
+        await client.admin.command("ping")
+        print(f"Connected to MongoDB: {DB_NAME}")
+    except Exception as e:
+        print(f"Warning: MongoDB not reachable ({e}). App will run; persistence will fail.")
+        client = AsyncIOMotorClient(MONGO_URI)
+        db = client[DB_NAME]
 
 
 async def close_db():

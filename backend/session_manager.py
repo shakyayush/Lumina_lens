@@ -14,22 +14,38 @@ When a new meeting starts, you create a new session ID.
 
 from datetime import datetime
 from uuid import uuid4
-from duplicate_detector import get_embedding, is_duplicate
+from duplicate_detector import get_embedding_async, is_duplicate_async
 
 # In-memory store: { session_id: session_data }
 _sessions: dict = {}
 
 
 def create_session(session_id: str) -> dict:
-    """Start a new meeting session."""
+    """Create a meeting session if missing; preserve if it already exists."""
+    if session_id in _sessions:
+        return {"session_id": session_id, "status": "already_exists"}
     _sessions[session_id] = {
         "id": session_id,
         "created_at": datetime.utcnow().isoformat(),
-        "questions": [],        # list of accepted Question dicts
-        "embeddings": [],       # parallel list of embedding vectors
-        "participants": set(),  # user_ids who submitted at least one question
+        "questions": [],
+        "all_questions": [],
+        "embeddings": [],
+        "participants": set(),
     }
     return {"session_id": session_id, "status": "created"}
+
+
+def reset_session(session_id: str) -> dict:
+    """Reset a meeting session to a clean state."""
+    _sessions[session_id] = {
+        "id": session_id,
+        "created_at": datetime.utcnow().isoformat(),
+        "questions": [],
+        "all_questions": [],
+        "embeddings": [],
+        "participants": set(),
+    }
+    return {"session_id": session_id, "status": "reset"}
 
 
 def get_session(session_id: str) -> dict | None:
@@ -37,7 +53,13 @@ def get_session(session_id: str) -> dict | None:
     return _sessions.get(session_id)
 
 
-def process_question(session_id: str, user_id: str, text: str, user_tier: str) -> dict:
+async def process_question(
+    session_id: str,
+    user_id: str,
+    text: str,
+    user_tier: str,
+    ai_enabled: bool,
+) -> dict:
     """
     Core logic: check for duplicates, then either accept or reject the question.
 
@@ -56,8 +78,8 @@ def process_question(session_id: str, user_id: str, text: str, user_tier: str) -
 
     session["participants"].add(user_id)
 
-    # --- Basic plan: cap at 5 questions per user per session ---
-    if user_tier == "basic":
+    # --- Basic plan cap applies only when AI organizer is ON ---
+    if ai_enabled and user_tier == "basic":
         user_question_count = sum(
             1 for q in session["questions"] if q["user_id"] == user_id
         )
@@ -72,7 +94,11 @@ def process_question(session_id: str, user_id: str, text: str, user_tier: str) -
             }
 
     # --- Duplicate check (FAISS + Gemini) ---
-    dup, score = is_duplicate(text, session["questions"], session["embeddings"])
+    # Only run AI filtering when the host has explicitly enabled AI Organizer.
+    if ai_enabled:
+        dup, score = await is_duplicate_async(text, session["questions"], session["embeddings"])
+    else:
+        dup, score = False, 0.0
 
     if dup:
         return {
@@ -99,7 +125,8 @@ def process_question(session_id: str, user_id: str, text: str, user_tier: str) -
     }
 
     session["questions"].append(question)
-    session["embeddings"].append(get_embedding(text))
+    # Embedding is CPU-bound; run off the event loop.
+    session["embeddings"].append(await get_embedding_async(text))
 
     return {
         "status": "unique",
@@ -114,7 +141,13 @@ def star_question(session_id: str, question_id: str) -> dict | None:
     session = _sessions.get(session_id)
     if not session:
         return None
-    for q in session["questions"]:
+    for q in session.get("questions", []):
+        if q["id"] == question_id:
+            if not q.get("starred", False):
+                q["starred"] = True
+                return q
+            return None # Already starred
+    for q in session.get("all_questions", []):
         if q["id"] == question_id:
             if not q.get("starred", False):
                 q["starred"] = True
@@ -131,6 +164,34 @@ def get_questions(session_id: str) -> list:
     # Priority questions appear first
     questions = session["questions"]
     return sorted(questions, key=lambda q: (0 if q["priority"] == "priority" else 1))
+
+
+def get_all_questions(session_id: str) -> list:
+    """Return all attendee-submitted questions for a session."""
+    session = _sessions.get(session_id)
+    if not session:
+        return []
+    questions = session.get("all_questions", [])
+    return sorted(questions, key=lambda q: (0 if q.get("priority") == "priority" else 1))
+
+
+def record_submission(session_id: str, user_id: str, text: str, user_tier: str) -> dict:
+    """Record every attendee submission so host can view full inbox when AI is OFF."""
+    session = _sessions.get(session_id)
+    if not session:
+        create_session(session_id)
+        session = _sessions[session_id]
+    q = {
+        "id": str(uuid4()),
+        "user_id": user_id,
+        "text": text,
+        "timestamp": datetime.utcnow().isoformat(),
+        "priority": "priority" if user_tier in ("pro", "enterprise") else "normal",
+        "starred": False,
+    }
+    session["all_questions"].append(q)
+    session["participants"].add(user_id)
+    return q
 
 
 def get_participants(session_id: str) -> list:
