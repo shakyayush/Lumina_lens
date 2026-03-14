@@ -7,7 +7,10 @@ const Dashboard = ({ apiUrl, onStartMeeting }) => {
   const [meetingCode, setMeetingCode] = useState('')
   const [generatedLink, setGeneratedLink] = useState('')
   const [copied, setCopied] = useState(false)
-  const [joinCode, setJoinCode] = useState('')
+  const [joinCode, setJoinCode] = useState(() => {
+    const parts = window.location.pathname.split('/join/')
+    return parts.length === 2 && parts[1] ? parts[1] : ''
+  })
 
   const appOrigin = window.location.origin
 
@@ -20,13 +23,7 @@ const Dashboard = ({ apiUrl, onStartMeeting }) => {
       .catch(() => {})
   }, [user, apiUrl])
 
-  // Auto-populate join code from deep link URL: /join/ROOM_ID
-  useEffect(() => {
-    const parts = window.location.pathname.split('/join/')
-    if (parts.length === 2 && parts[1]) {
-      setJoinCode(parts[1])
-    }
-  }, [])
+
 
   const handleStartMeeting = () => {
     const roomId = meetingCode.trim() ||

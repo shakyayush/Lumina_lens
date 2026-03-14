@@ -117,7 +117,7 @@ const WebCamVideo = ({
       const room = new Room({ adaptiveStream: true, dynacast: true })
       roomRef.current = room
 
-      room.on(RoomEvent.TrackSubscribed, (track, publication) => {
+      room.on(RoomEvent.TrackSubscribed, (track) => {
         if (track.kind !== Track.Kind.Video || !remoteTracksRef.current) return
         const el = track.attach()
         el.className = 'w-28 h-20 rounded-lg object-cover border border-white/20 bg-black/50'
@@ -183,7 +183,7 @@ const WebCamVideo = ({
   useEffect(() => {
     const stop = () => {
       restartedByUsRef.current = false
-      try { speechRecognitionRef.current?.stop() } catch (_) {}
+      try { speechRecognitionRef.current?.stop() } catch (err) { console.debug('Stop warning', err) }
       speechRecognitionRef.current = null
     }
 
@@ -206,14 +206,16 @@ const WebCamVideo = ({
     }
     rec.onend = () => {
       if (restartedByUsRef.current && !isMuted && enableMultimodal) {
-        try { rec.start() } catch (_) {}
+        try { rec.start() } catch (err) { console.debug('Start warning', err) }
       }
     }
     try {
       restartedByUsRef.current = true
       rec.start()
       speechRecognitionRef.current = rec
-    } catch (_) {}
+    } catch (err) {
+      console.debug('Recognition start error', err)
+    }
 
     return stop
   }, [isMuted, enableMultimodal])

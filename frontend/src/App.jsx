@@ -41,7 +41,7 @@ function SignedInApp() {
         photo_url: user.imageUrl || '',
       }),
     }).catch(() => {})
-  }, [user?.id])
+  }, [user])
 
   // Resize + drag handlers
   useEffect(() => {

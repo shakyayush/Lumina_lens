@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import LiveStream from './LiveStream'
 
 const AudienceView = ({ sessionId, apiUrl, currentUser }) => {
   const [messages, setMessages] = useState([])
@@ -223,6 +224,17 @@ const AudienceView = ({ sessionId, apiUrl, currentUser }) => {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Live Video Broadcast Area */}
+      <div className="p-3 bg-black/5 border-b border-[var(--border-subtle)] shrink-0">
+        <LiveStream 
+          sessionId={sessionId} 
+          apiUrl={apiUrl} 
+          role="audience" 
+          userId={userId} 
+          hostName={hostName}
+        />
       </div>
 
       {/* Messages Area */}
