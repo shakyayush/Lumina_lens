@@ -1,13 +1,28 @@
-fastapi
-uvicorn[standard]
-sentence-transformers
-numpy
-pydantic
-motor
-pymongo
-youtube-transcript-api
-faiss-cpu
-redis>=4.2.0
-python-dotenv
-google-genai
-livekit-api
+# Core API
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# AI / ML
+sentence-transformers>=3.0.0
+faiss-cpu>=1.8.0
+numpy>=1.26.0
+google-genai>=1.0.0
+
+# Database
+motor>=3.3.0
+pymongo>=4.6.0
+
+# Data validation
+pydantic>=2.6.0
+
+# Redis (for WebSocket pub/sub)
+redis>=4.6.0
+
+# YouTube transcripts
+youtube-transcript-api>=0.6.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# LiveKit RTC (optional — used only if RTC_PROVIDER_URL is set)
+livekit-api>=0.7.0
