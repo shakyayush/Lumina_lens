@@ -105,61 +105,86 @@ const AudienceView = ({ sessionId, apiUrl, currentUser }) => {
     }
   }
 
-  const sendMessage = async (e) => {
+  const sendMessage = async (e, retryText = null) => {
     e?.preventDefault()
-    const msgText = inputMessage.trim()
+    const msgText = (retryText || inputMessage).trim()
     if (!msgText || msgText.length < 5) {
       setMessages(prev => [...prev, {
         text: '⚠️ Please enter a question with at least 5 characters.',
-        type: 'error',
-        id: Date.now(),
+        type: 'error', id: Date.now(),
       }])
       return
     }
     if (msgText.length > 500) {
       setMessages(prev => [...prev, {
         text: '⚠️ Question is too long (max 500 characters).',
-        type: 'error',
-        id: Date.now(),
+        type: 'error', id: Date.now(),
       }])
       return
     }
 
-    setInputMessage('')
-    setMessages(prev => [...prev, { text: msgText, type: 'user', id: Date.now() }])
+    if (!retryText) {
+      setInputMessage('')
+      setMessages(prev => [...prev, { text: msgText, type: 'user', id: Date.now() }])
+    }
 
-    try {
-      const res = await fetch(`${apiUrl}/session/${sessionId}/question`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userId, text: msgText }),
-      })
-      const data = await res.json()
+    const MAX_RETRIES = 2
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 15000) // 15s timeout
 
-      let feedbackMsg = ''
-      let feedbackType = 'ai'
+        const res = await fetch(`${apiUrl}/session/${sessionId}/question`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId, text: msgText }),
+          signal: controller.signal,
+        })
+        clearTimeout(timeoutId)
 
-      if (data.status === 'duplicate') {
-        feedbackMsg = `🔁 Duplicate: ${data.message}`
-        feedbackType = 'error'
-      } else if (data.status === 'context_answered') {
-        feedbackMsg = `🤖 AI Answer: ${data.message}`
-        feedbackType = 'ai'
-      } else {
-        feedbackMsg = `✔️ Question submitted! You'll earn Sharp Tokens if the host stars it.`
-        feedbackType = 'success'
+        const data = await res.json()
+
+        let feedbackMsg = ''
+        let feedbackType = 'ai'
+
+        if (data.status === 'duplicate') {
+          feedbackMsg = `🔁 ${data.message}`
+          feedbackType = 'error'
+        } else if (data.status === 'context_answered') {
+          feedbackMsg = `🤖 AI Answer: ${data.message}`
+          feedbackType = 'ai'
+        } else {
+          feedbackMsg = `✅ Question sent to host! You'll earn Sharp Tokens if they star it.`
+          feedbackType = 'success'
+        }
+
+        setMessages(prev => [...prev, { text: feedbackMsg, type: feedbackType, id: Date.now() + 1 }])
+        if (data.total_points !== undefined) setPoints(data.total_points)
+        return // success — exit
+
+      } catch (err) {
+        const isTimeout = err?.name === 'AbortError'
+        if (attempt < MAX_RETRIES) {
+          // Show retrying message and wait 3s before next attempt
+          setMessages(prev => [...prev, {
+            text: `⏳ Server is waking up… retrying (${attempt + 1}/${MAX_RETRIES})`,
+            type: 'error', id: Date.now() + attempt,
+          }])
+          await new Promise(r => setTimeout(r, 3000))
+        } else {
+          // All retries failed
+          setMessages(prev => [...prev, {
+            text: isTimeout
+              ? '⚠️ Server took too long to respond. The backend may be cold-starting — please try again in 30 seconds.'
+              : '⚠️ Could not reach server. Check your internet connection or try again shortly.',
+            type: 'error', id: Date.now() + 10,
+            retryText: msgText,
+          }])
+        }
       }
-
-      setMessages(prev => [...prev, { text: feedbackMsg, type: feedbackType, id: Date.now() + 1 }])
-      if (data.total_points !== undefined) setPoints(data.total_points)
-    } catch (e) {
-      setMessages(prev => [...prev, {
-        text: '⚠️ Could not reach server. Please try again.',
-        type: 'error',
-        id: Date.now() + 1,
-      }])
     }
   }
+
 
   const triggerChaos = () => {
     const chaosMessages = [

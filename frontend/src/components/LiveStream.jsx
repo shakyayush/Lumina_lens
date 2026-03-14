@@ -35,34 +35,49 @@ export default function LiveStream({
   const [roomKey, setRoomKey] = useState(0) // bump to reconnect
 
   // Fetch a fresh LiveKit token when session/role/user changes
+  // Auto-retries up to 3 times (backend may be cold-starting on free tier)
   useEffect(() => {
     let mounted = true
     setToken(null)
     setWsUrl(null)
     setError(null)
 
-    async function fetchToken() {
-      try {
-        const res = await fetch(`${apiUrl}/session/${sessionId}/rtc-token`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: userId, role }),
-        })
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.detail || 'Failed to get stream token')
-        if (mounted) {
-          setToken(data.token)
-          setWsUrl(data.ws_url)
-          setRoomKey(k => k + 1)
+    async function fetchTokenWithRetry() {
+      const MAX_ATTEMPTS = 3
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          const controller = new AbortController()
+          const to = setTimeout(() => controller.abort(), 20000)
+          const res = await fetch(`${apiUrl}/session/${sessionId}/rtc-token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: userId, role }),
+            signal: controller.signal,
+          })
+          clearTimeout(to)
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.detail || 'Failed to get stream token')
+          if (mounted) {
+            setToken(data.token)
+            setWsUrl(data.ws_url)
+            setRoomKey(k => k + 1)
+          }
+          return // success
+        } catch (e) {
+          if (!mounted) return
+          if (attempt < MAX_ATTEMPTS) {
+            await new Promise(r => setTimeout(r, 8000)) // wait 8s before retry
+          } else {
+            if (mounted) setError(e.message)
+          }
         }
-      } catch (e) {
-        if (mounted) setError(e.message)
       }
     }
 
-    fetchToken()
+    fetchTokenWithRetry()
     return () => { mounted = false }
   }, [sessionId, apiUrl, role, userId])
+
 
   // ── Error state ──────────────────────────────────────────────────────────
   if (error) {

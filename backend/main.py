@@ -86,25 +86,31 @@ RTC_PROVIDER_URL = os.getenv("RTC_PROVIDER_URL", "").strip()
 RTC_API_KEY = os.getenv("RTC_API_KEY", "").strip()
 RTC_API_SECRET = os.getenv("RTC_API_SECRET", "").strip()
 
-# Allowed frontend origins — controlled via FRONTEND_URL env var on Render
-_base_origins = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:5173",
-]
+# Allowed frontend origins — FRONTEND_URL env var on Render adds the prod domain.
+# We also always allow localhost for development.
 _prod_url = os.getenv("FRONTEND_URL", "").strip()
-if _prod_url:
-    _base_origins.append(_prod_url)
 
-ALLOWED_ORIGINS = _base_origins
+ALLOWED_ORIGINS = (
+    # If FRONTEND_URL is set on Render, restrict to known origins
+    [
+        _prod_url,
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+    ]
+    if _prod_url
+    # Otherwise allow all origins (safe since allow_credentials=False)
+    else ["*"]
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=False,  # Must be False when not using specific credentials
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
