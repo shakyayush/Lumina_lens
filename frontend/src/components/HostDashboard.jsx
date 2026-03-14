@@ -12,6 +12,7 @@ const HostDashboard = ({ sessionId, apiUrl, hostToken }) => {
   const [isMetadataSaved, setIsMetadataSaved] = useState(false)
   const [isNarrow, setIsNarrow] = useState(window.innerWidth < 640)
   const [showDraftBox, setShowDraftBox] = useState(window.innerWidth >= 640)
+  const [participantCount, setParticipantCount] = useState(0)
   const ws = useRef(null)
 
   useEffect(() => {
@@ -33,6 +34,8 @@ const HostDashboard = ({ sessionId, apiUrl, hostToken }) => {
         if (data.type === 'new_question' || data.type === 'star') {
           if (data.questions) setQuestions(data.questions)
           if (data.leaderboard) setLeaderboard(data.leaderboard)
+        } else if (data.type === 'participant_count') {
+          setParticipantCount(data.count || 0)
         }
       } catch (e) {
         console.warn('[WS] failed to parse message', e)
@@ -112,6 +115,22 @@ const HostDashboard = ({ sessionId, apiUrl, hostToken }) => {
 
   return (
     <div className={`flex-1 flex flex-col glass-panel rounded-2xl animate-slide-in min-h-0 ${isNarrow ? 'max-h-[70vh] overflow-hidden' : 'overflow-hidden'}`}>
+      
+      {/* Header with Live Status & Participant Count */}
+      <div className="px-4 py-3 border-b border-[var(--border-subtle)] bg-white/50 flex justify-between items-center">
+        <h2 className="text-sm font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-700 to-slate-900 tracking-wide">
+          Host Dashboard
+        </h2>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-600 border border-blue-200 rounded-full text-xs font-semibold shadow-sm">
+            👥 {participantCount} online
+          </div>
+          <div className="flex items-center gap-1.5 px-3 py-1 bg-purple-50 text-purple-600 border border-purple-200 rounded-full text-xs font-semibold shadow-sm">
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse"></span>
+            Session Active
+          </div>
+        </div>
+      </div>
       
       {/* Tabs */}
       <div className="flex flex-col border-b border-[var(--border-subtle)] bg-white/70">

@@ -6,6 +6,7 @@ const AudienceView = ({ sessionId, apiUrl, currentUser }) => {
   const [points, setPoints] = useState(0)
   const [hostName, setHostName] = useState('')
   const [meetingTopic, setMeetingTopic] = useState('')
+  const [participantCount, setParticipantCount] = useState(0)
   const [isNarrow, setIsNarrow] = useState(window.innerWidth < 640 || window.innerHeight < 700)
 
   // Use Firebase uid or fall back to localStorage for unauthenticated preview
@@ -57,6 +58,11 @@ const AudienceView = ({ sessionId, apiUrl, currentUser }) => {
             type: 'ai',
             id: Date.now() + 1,
           }])
+        }
+
+        // Live Participant Count
+        if (data.type === 'participant_count') {
+          setParticipantCount(data.count || 0)
         }
       } catch (e) {
         console.warn('[WS] failed to parse message', e)
@@ -207,9 +213,14 @@ const AudienceView = ({ sessionId, apiUrl, currentUser }) => {
               </span>
             </div>
           )}
-          <div className="text-right pr-2">
-            <div className="text-[10px] uppercase text-slate-500 font-bold leading-none">Sharp Tokens</div>
-            <div className="text-sm font-bold text-amber-400 leading-none mt-1">{points}</div>
+          <div className="text-right flex items-center gap-3">
+            <div className="flex items-center gap-1.5 px-2 py-1 bg-blue-500/10 text-blue-300 border border-blue-500/20 rounded-full text-[10px] font-mono shadow-sm">
+              👥 {participantCount}
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-slate-500 font-bold leading-none">Sharp Tokens</div>
+              <div className="text-sm font-bold text-amber-400 leading-none mt-1 pr-2">{points}</div>
+            </div>
           </div>
         </div>
       </div>

@@ -59,13 +59,20 @@ class ConnectionManager:
                 # Redis not running — fine for MVP; local broadcast still works
                 pass
 
-        self.active_connections[session_id].append(websocket)
+        # Broadcast new participant count to everyone in the session
+        count = len(self.active_connections[session_id])
+        await self._broadcast_local(session_id, {"type": "participant_count", "count": count})
 
     def disconnect(self, session_id: str, websocket: WebSocket):
         if session_id in self.active_connections:
             if websocket in self.active_connections[session_id]:
                 self.active_connections[session_id].remove(websocket)
-            if not self.active_connections[session_id]:
+            
+            remaining_count = len(self.active_connections[session_id])
+            if remaining_count > 0:
+                # Need to use asyncio.create_task because disconnect is synchronous
+                asyncio.create_task(self._broadcast_local(session_id, {"type": "participant_count", "count": remaining_count}))
+            else:
                 del self.active_connections[session_id]
                 task = self.pubsub_tasks.pop(session_id, None)
                 if task:
