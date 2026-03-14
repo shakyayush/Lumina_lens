@@ -250,9 +250,6 @@ const HostDashboard = ({ sessionId, apiUrl, hostToken }) => {
                     <div className="flex items-center gap-2">
                       <div className="w-5 h-5 rounded-full bg-slate-700 flex items-center justify-center text-[10px]">👤</div>
                       <span className="text-[11px] text-slate-400 font-medium truncate max-w-[120px]">{q.user_id}</span>
-                      {q.priority === 'priority' && (
-                        <span className="text-[9px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/30 px-1.5 py-0.5 rounded">PRO</span>
-                      )}
                     </div>
 
                     {q.starred ? (
@@ -291,7 +288,6 @@ const HostDashboard = ({ sessionId, apiUrl, hostToken }) => {
                 </div>
                 <div className="flex-1">
                   <div className="text-sm font-bold break-all">{u.user_id}</div>
-                  <div className="text-[10px] uppercase font-bold text-blue-500/70">{u.tier} Tier</div>
                 </div>
                 <div className="text-sm font-black text-white">
                   {u.points} <span className="text-amber-400">⭐</span>

@@ -12,6 +12,8 @@ services:
         sync: false
       - key: REDIS_URL
         sync: false
+      - key: FRONTEND_URL
+        sync: false        # Set to your Vercel URL e.g. https://lumina-lens.vercel.app
       - key: RTC_PROVIDER_URL
         value: ""
       - key: RTC_API_KEY

@@ -39,14 +39,13 @@ from pymongo.errors import ServerSelectionTimeoutError
 from models import (
     QuestionRequest,
     QuestionResponse,
-    RedeemRequest,
-    RedeemResponse,
     StarQuestionRequest,
     AIModeRequest,
     MultimodalContextRequest,
     RtcTokenRequest,
     RtcTokenResponse,
     SessionMetadataRequest,
+    UserProfileRequest,
 )
 from websockets_manager import ws_manager
 import session_manager as sm
@@ -87,14 +86,17 @@ RTC_PROVIDER_URL = os.getenv("RTC_PROVIDER_URL", "").strip()
 RTC_API_KEY = os.getenv("RTC_API_KEY", "").strip()
 RTC_API_SECRET = os.getenv("RTC_API_SECRET", "").strip()
 
-# Allowed frontend origins — add your deployed domain as needed
-ALLOWED_ORIGINS = [
+# Allowed frontend origins — controlled via FRONTEND_URL env var on Render
+_base_origins = [
     "http://localhost:5173",
     "http://localhost:3000",
-    "http://localhost:8080",
     "http://127.0.0.1:5173",
-    "https://lumina-lens-omega.vercel.app",  # Production frontend
 ]
+_prod_url = os.getenv("FRONTEND_URL", "").strip()
+if _prod_url:
+    _base_origins.append(_prod_url)
+
+ALLOWED_ORIGINS = _base_origins
 
 app.add_middleware(
     CORSMiddleware,
@@ -394,7 +396,6 @@ async def submit_question(session_id: str, body: QuestionRequest):
     """
     user_status = rw.get_status(body.user_id)
     total_points = user_status["points"]
-    tier = user_status["tier"]
     ai_enabled = _ai_mode.get(session_id, True)
     meta = sm.get_session_metadata(session_id)
 
@@ -402,7 +403,6 @@ async def submit_question(session_id: str, body: QuestionRequest):
         session_id,
         body.user_id,
         body.text,
-        tier,
         ai_enabled,
     )
 
@@ -413,7 +413,6 @@ async def submit_question(session_id: str, body: QuestionRequest):
             message=result["message"],
             points_earned=0,
             total_points=total_points,
-            tier=tier,
             similarity_score=result.get("similarity_score"),
         )
 
@@ -423,7 +422,7 @@ async def submit_question(session_id: str, body: QuestionRequest):
         "user_id": body.user_id,
         "text": body.text,
         "timestamp": datetime.utcnow().isoformat(),
-        "priority": "priority" if tier in ("pro", "enterprise") else "normal",
+        "priority": "normal",
         "starred": False,
     }
 
@@ -470,7 +469,12 @@ async def submit_question(session_id: str, body: QuestionRequest):
                 )
 
         if not answer_text:
-            answer_text = await asyncio.to_thread(cm.generate_open_answer, body.text)
+            answer_text = await asyncio.to_thread(
+                cm.generate_open_answer, 
+                body.text,
+                meta.get("host_name"),
+                meta.get("meeting_topic")
+            )
 
         if answer_text:
             return QuestionResponse(
@@ -478,7 +482,6 @@ async def submit_question(session_id: str, body: QuestionRequest):
                 message=answer_text + AI_ANSWER_SUFFIX,
                 points_earned=0,
                 total_points=total_points,
-                tier=tier,
                 similarity_score=score or None,
             )
 
@@ -487,7 +490,6 @@ async def submit_question(session_id: str, body: QuestionRequest):
         message=result["message"],
         points_earned=0,
         total_points=total_points,
-        tier=tier,
         similarity_score=result.get("similarity_score"),
     )
 
@@ -516,7 +518,7 @@ async def star_question_endpoint(session_id: str, body: StarQuestionRequest):
     asyncio.create_task(_safe_task(db.save_question(session_id, starred_q), "save_starred_question"))
     asyncio.create_task(
         _safe_task(
-            db.save_user_rewards(starred_q["user_id"], updated_rewards["points"], updated_rewards["tier"]),
+            db.save_user_rewards(starred_q["user_id"], updated_rewards["points"]),
             "save_user_rewards",
         )
     )
@@ -556,32 +558,48 @@ async def get_questions(session_id: str):
 
 @app.get("/rewards/{user_id}")
 async def get_rewards(user_id: str):
-    """Get a user's Spark Points balance, tier, and benefits."""
+    """Get a user's Spark Points balance."""
     # Try to load from DB first so we have the latest persisted value
     db_record = await db.get_user_rewards(user_id)
     if db_record:
-        rw.load_from_db(user_id, db_record.get("points", 0), db_record.get("tier", "basic"))
+        rw.load_from_db(user_id, db_record.get("points", 0))
     return rw.get_status(user_id)
 
 
-@app.post("/rewards/{user_id}/redeem", response_model=RedeemResponse)
-async def redeem_rewards(user_id: str, body: RedeemRequest):
-    """
-    Redeem Spark Points to upgrade to a premium tier.
+# ─────────────────────────────────────────────
+# USER PROFILE ROUTES
+# ─────────────────────────────────────────────
 
-    Tiers:
-      - pro        → 500 points → unlimited questions + priority highlight
-      - enterprise → 2000 points → Pro + analytics export
+
+
+@app.post("/user/profile")
+async def upsert_user_profile(body: UserProfileRequest):
     """
-    result = rw.redeem_points(user_id, body.tier)
-    if result["success"]:
-        asyncio.create_task(
-            _safe_task(
-                db.save_user_rewards(user_id, result["remaining_points"], result["new_tier"]),
-                "redeem_save_user_rewards",
-            )
+    Called after Firebase login — saves (or updates) the user's profile in MongoDB.
+    Idempotent: safe to call on every login.
+    """
+    asyncio.create_task(
+        _safe_task(
+            db.save_user_profile(body.uid, body.name, body.email, body.photo_url),
+            "save_user_profile",
         )
-    return RedeemResponse(**result)
+    )
+    return {"success": True}
+
+
+@app.get("/user/profile/{uid}")
+async def get_user_profile(uid: str):
+    """Fetch a user's profile and Sharp Token balance from MongoDB."""
+    profile = await db.get_user_profile(uid)
+    rewards = await db.get_user_rewards(uid)
+    return {
+        "uid": uid,
+        "name": profile.get("name", "") if profile else "",
+        "email": profile.get("email", "") if profile else "",
+        "photo_url": profile.get("photo_url", "") if profile else "",
+        "points": rewards.get("points", 0) if rewards else 0,
+    }
+
 
 
 @app.get("/session/{session_id}/leaderboard")

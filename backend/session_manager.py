@@ -56,7 +56,6 @@ def create_session(session_id: str) -> dict:
         "embeddings": [],
         "faiss_index": _build_fresh_index(),
         "participants": set(),
-        "user_question_counts": {},
         "host_name": None,
         "meeting_topic": None,
         "host_token": None,  # Only set when host starts the session
@@ -75,7 +74,6 @@ def reset_session(session_id: str) -> dict:
         "embeddings": [],
         "faiss_index": _build_fresh_index(),
         "participants": set(),
-        "user_question_counts": {},
         "host_name": None,
         "meeting_topic": None,
         "host_token": host_token,
@@ -122,7 +120,6 @@ async def process_question(
     session_id: str,
     user_id: str,
     text: str,
-    user_tier: str,
     ai_enabled: bool,
 ) -> dict:
     """
@@ -142,21 +139,6 @@ async def process_question(
             session = _sessions[session_id]
 
         session["participants"].add(user_id)
-
-        # --- Basic plan cap (O(1) lookup via counter dict) ---
-        if ai_enabled and user_tier == "basic":
-            user_count = session["user_question_counts"].get(user_id, 0)
-            if user_count >= 5:
-                return {
-                    "status": "limit_reached",
-                    "message": (
-                        "⚠️ You've reached the 5-question limit for Basic tier. "
-                        "Redeem Spark Points to unlock Pro and ask unlimited questions!"
-                    ),
-                    "points_earned": 0,
-                    "question_id": None,
-                    "similarity_score": None,
-                }
 
         # --- Duplicate check using persistent FAISS index ---
         if ai_enabled and session["embeddings"]:
@@ -186,14 +168,13 @@ async def process_question(
 
         # --- Accept unique question ---
         question_id = str(uuid4())
-        priority = "priority" if user_tier in ("pro", "enterprise") else "normal"
 
         question = {
             "id": question_id,
             "user_id": user_id,
             "text": text,
             "timestamp": datetime.utcnow().isoformat(),
-            "priority": priority,
+            "priority": "normal",
             "starred": False,
         }
 
@@ -206,7 +187,7 @@ async def process_question(
         session["faiss_index"].add(vec)
 
         # Update per-user question counter (O(1))
-        session["user_question_counts"][user_id] = session["user_question_counts"].get(user_id, 0) + 1
+
 
         return {
             "status": "unique",

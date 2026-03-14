@@ -298,28 +298,46 @@ ANSWER:"""
         return None
 
 
-def generate_open_answer(question: str) -> str | None:
+def generate_open_answer(
+    question: str,
+    host_name: str | None = None,
+    meeting_topic: str | None = None,
+) -> str | None:
     """
     Fallback: generate an answer from general knowledge when host context
-    does not cover the question well enough.
+    does not cover the question well enough, or use session metadata if relevant.
     """
     if not _gemini:
         return None
 
+    meta_parts = []
+    if host_name:
+        meta_parts.append(f"Host Name: {host_name}")
+    if meeting_topic:
+        meta_parts.append(f"Meeting Topic/Hackathon Topic: {meeting_topic}")
+    
+    meta_context = ""
+    if meta_parts:
+        meta_context = "SESSION INFO:\n" + "\n".join(meta_parts) + "\n\n"
+
     prompt = f"""You are a helpful meeting assistant.
 
-Answer the user's question clearly and concisely.
-- Use general knowledge if needed.
-- Prefer one or two short sentences.
+Rules:
+1. Answer the user's question clearly and concisely (max 1-2 short sentences).
+2. Use the provided SESSION INFO if the question asks about the host, meeting, or hackathon topic.
+3. Use general knowledge for basic, common-sense questions.
+4. IMPORTANT: If the question requires specific context not provided here, asks for the host's personal opinion, or you are unsure of the correct answer, you MUST reply with exactly: NOT_COVERED
 
-QUESTION:
+{meta_context}QUESTION:
 {question}
 
 ANSWER:"""
     try:
         response = _gemini.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         text = (response.text or "").strip()
-        return text.splitlines()[0].strip() if text else None
+        if not text or "not_covered" in text.lower():
+            return None
+        return text.splitlines()[0].strip()
     except Exception:
         return None
 

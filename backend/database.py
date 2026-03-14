@@ -74,11 +74,11 @@ async def get_questions_from_db(session_id: str) -> list:
 
 # ── Users / Rewards ───────────────────────────────────────────────────────────
 
-async def save_user_rewards(user_id: str, points: int, tier: str):
+async def save_user_rewards(user_id: str, points: int):
     """Upsert (create or update) a user's Spark Points record."""
     await db.users.update_one(
         {"user_id": user_id},
-        {"$set": {"points": points, "tier": tier, "updated_at": datetime.utcnow()}},
+        {"$set": {"points": points, "updated_at": datetime.utcnow()}},
         upsert=True,
     )
 
@@ -102,4 +102,23 @@ async def save_session(session_id: str):
 async def get_all_sessions_from_db() -> list:
     """Fetch all session records."""
     cursor = db.sessions.find({}, {"_id": 0})
-    return await cursor.to_list(length=100)
+
+
+async def save_user_profile(uid: str, name: str, email: str, photo_url: str):
+    """Upsert a user profile record (called after Firebase login)."""
+    await db.users.update_one(
+        {"uid": uid},
+        {"$set": {
+            "uid": uid,
+            "name": name,
+            "email": email,
+            "photo_url": photo_url,
+            "updated_at": datetime.utcnow(),
+        }, "$setOnInsert": {"created_at": datetime.utcnow()}},
+        upsert=True,
+    )
+
+
+async def get_user_profile(uid: str) -> dict | None:
+    """Fetch a user's profile from MongoDB."""
+    return await db.users.find_one({"uid": uid}, {"_id": 0})

@@ -18,19 +18,10 @@ class QuestionResponse(BaseModel):
     message: str
     points_earned: int
     total_points: int
-    tier: str
     similarity_score: Optional[float] = None
 
 
-class RedeemRequest(BaseModel):
-    tier: str = Field(..., description="Target tier to redeem points for: 'pro' or 'enterprise'")
 
-
-class RedeemResponse(BaseModel):
-    success: bool
-    message: str
-    new_tier: str
-    remaining_points: int
 
 
 class Question(BaseModel):
@@ -73,3 +64,10 @@ class RtcTokenResponse(BaseModel):
 class SessionMetadataRequest(BaseModel):
     host_name: Optional[str] = Field(None, description="Name of the meeting host", example="Alice Johnson")
     meeting_topic: Optional[str] = Field(None, description="Topic or agenda of the meeting", example="Q3 Roadmap Review")
+
+
+class UserProfileRequest(BaseModel):
+    uid: str = Field(..., description="Firebase UID")
+    name: str = Field(default="", description="Display name from Google account")
+    email: str = Field(default="", description="Gmail address")
+    photo_url: str = Field(default="", description="Google profile photo URL")

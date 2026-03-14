@@ -1,21 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
 
-const AudienceView = ({ sessionId, apiUrl }) => {
+const AudienceView = ({ sessionId, apiUrl, currentUser }) => {
   const [messages, setMessages] = useState([])
   const [inputMessage, setInputMessage] = useState('')
   const [points, setPoints] = useState(0)
-  const [tier, setTier] = useState('basic')
+  const [hostName, setHostName] = useState('')
+  const [meetingTopic, setMeetingTopic] = useState('')
   const [isNarrow, setIsNarrow] = useState(window.innerWidth < 640 || window.innerHeight < 700)
 
-  // Fix: use crypto.randomUUID() for guaranteed uniqueness (no collision risk)
-  const [userId] = useState(() => {
+  // Use Firebase uid or fall back to localStorage for unauthenticated preview
+  const userId = currentUser?.uid || (() => {
     const key = 'lumina_user_id'
-    const existing = window.localStorage.getItem(key)
-    if (existing) return existing
-    const created = 'Attendee_' + (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2))
-    window.localStorage.setItem(key, created)
-    return created
-  })
+    return window.localStorage.getItem(key) || (
+      (() => { const id = 'Attendee_' + Math.random().toString(36).slice(2); window.localStorage.setItem(key, id); return id })()
+    )
+  })()
 
   const chatEndRef = useRef(null)
   const ws = useRef(null)
@@ -69,6 +68,7 @@ const AudienceView = ({ sessionId, apiUrl }) => {
     }
 
     fetchPoints()
+    fetchMetadata()
 
     return () => {
       window.removeEventListener('resize', onResize)
@@ -81,7 +81,17 @@ const AudienceView = ({ sessionId, apiUrl }) => {
       const res = await fetch(`${apiUrl}/rewards/${userId}`)
       const data = await res.json()
       setPoints(Number(data?.points) || 0)
-      setTier(data?.tier ?? 'basic')
+    } catch (e) {}
+  }
+
+  const fetchMetadata = async () => {
+    try {
+      const res = await fetch(`${apiUrl}/session/${sessionId}/metadata`)
+      const data = await res.json()
+      if (data) {
+        setHostName(data.host_name || '')
+        setMeetingTopic(data.meeting_topic || '')
+      }
     } catch (e) {}
   }
 
@@ -121,9 +131,6 @@ const AudienceView = ({ sessionId, apiUrl }) => {
 
       if (data.status === 'duplicate') {
         feedbackMsg = `🔁 Duplicate: ${data.message}`
-        feedbackType = 'error'
-      } else if (data.status === 'limit_reached') {
-        feedbackMsg = data.message
         feedbackType = 'error'
       } else if (data.status === 'context_answered') {
         feedbackMsg = `🤖 AI Answer: ${data.message}`
@@ -173,19 +180,36 @@ const AudienceView = ({ sessionId, apiUrl }) => {
     <div className="flex-1 flex flex-col glass-panel rounded-2xl overflow-hidden animate-slide-in min-h-0">
       {/* Audience Header */}
       <div className="p-3 sm:p-4 border-b border-[var(--border-subtle)] bg-[rgba(255,255,255,0.02)] flex justify-between items-center gap-2">
-        <h2 className="font-bold flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-          <span className="text-sm sm:text-base">Live Q&A Chat</span>
-        </h2>
-        <div className="flex items-center gap-2 sm:gap-3">
-          <div className="text-right">
+        <div className="flex flex-col min-w-0">
+          <h2 className="font-bold flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-blue-500" />
+            <span className="text-sm sm:text-base">Live Q&A Chat</span>
+          </h2>
+          {(hostName || meetingTopic) && (
+            <div className="text-[10px] text-slate-400 mt-1 ml-4 truncate">
+              Session/Meeting {meetingTopic && ` ${meetingTopic}`} {hostName && ` by ${hostName}`}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {/* User identity */}
+          {currentUser && (
+            <div className="flex items-center gap-1.5">
+              {currentUser.photoURL ? (
+                <img src={currentUser.photoURL} alt="" className="w-6 h-6 rounded-full border border-white/20" />
+              ) : (
+                <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-[10px] font-bold">
+                  {(currentUser.displayName || 'U')[0].toUpperCase()}
+                </div>
+              )}
+              <span className="text-[10px] text-slate-400 hidden sm:block truncate max-w-[80px]">
+                {currentUser.displayName?.split(' ')[0] || 'You'}
+              </span>
+            </div>
+          )}
+          <div className="text-right pr-2">
             <div className="text-[10px] uppercase text-slate-500 font-bold leading-none">Sharp Tokens</div>
             <div className="text-sm font-bold text-amber-400 leading-none mt-1">{points}</div>
-          </div>
-          <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${
-            tier === 'basic' ? 'border-slate-500 text-slate-500' : 'border-blue-500 text-blue-400 shadow-[0_0_10px_rgba(59,130,246,0.2)]'
-          }`}>
-            {tier}
           </div>
         </div>
       </div>
