@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useUser, useClerk, UserButton } from '@clerk/clerk-react'
 
-const Dashboard = ({ apiUrl, onStartMeeting }) => {
+const Dashboard = ({ apiUrl, onStartMeeting, isStarting = false }) => {
   const { user } = useUser()
   const [points, setPoints] = useState(0)
   const [meetingCode, setMeetingCode] = useState('')
@@ -26,6 +26,7 @@ const Dashboard = ({ apiUrl, onStartMeeting }) => {
 
 
   const handleStartMeeting = () => {
+    if (isStarting) return
     const roomId = meetingCode.trim() ||
       `room-${Date.now().toString(36)}-${Math.floor(Math.random() * 9999)}`
     const link = `${appOrigin}/join/${roomId}`
@@ -35,6 +36,7 @@ const Dashboard = ({ apiUrl, onStartMeeting }) => {
   }
 
   const handleJoinMeeting = () => {
+    if (isStarting) return
     const code = joinCode.trim()
     if (!code) { alert('Enter a meeting code or link.'); return }
     const roomId = code.includes('/join/') ? code.split('/join/').pop() : code
@@ -115,9 +117,12 @@ const Dashboard = ({ apiUrl, onStartMeeting }) => {
           <button
             id="start-meeting-btn"
             onClick={handleStartMeeting}
-            className="w-full btn-primary py-3 rounded-xl font-semibold text-sm animate-pulse-glow"
+            disabled={isStarting}
+            className="w-full btn-primary py-3 rounded-xl font-semibold text-sm animate-pulse-glow disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
-            🚀 Start Meeting
+            {isStarting ? (
+              <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Joining…</>
+            ) : '🚀 Start Meeting'}
           </button>
 
           {/* Shareable link */}
@@ -152,9 +157,12 @@ const Dashboard = ({ apiUrl, onStartMeeting }) => {
           <button
             id="join-meeting-btn"
             onClick={handleJoinMeeting}
-            className="w-full bg-[rgba(255,255,255,0.05)] border border-[var(--border-subtle)] hover:border-blue-500/50 hover:bg-blue-500/10 py-3 rounded-xl transition-all font-semibold text-sm"
+            disabled={isStarting}
+            className="w-full bg-[rgba(255,255,255,0.05)] border border-[var(--border-subtle)] hover:border-blue-500/50 hover:bg-blue-500/10 py-3 rounded-xl transition-all font-semibold text-sm disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
-            Join as Audience
+            {isStarting ? (
+              <><span className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" /> Joining…</>
+            ) : 'Join as Audience'}
           </button>
         </div>
 
