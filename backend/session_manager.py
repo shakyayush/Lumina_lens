@@ -5,16 +5,13 @@ Manages individual meeting sessions entirely in memory.
 
 Each session holds:
   - A list of accepted (unique) questions shown to the host
-  - The embeddings of those questions (used for duplicate checks)
-  - A persistent FAISS index per session (built once, updated incrementally)
+  - A list of their embeddings (used for duplicate checks via numpy cosine similarity)
   - A set of all user IDs who participated
   - Session metadata: host name, meeting topic
 
-Fixes applied:
-  - Unified question IDs (record_submission uses the same ID as process_question)
-  - Per-user question count tracked via a counter dict (O(1) vs O(N))
-  - Persistent FAISS index per session (instead of rebuilding on every call)
-  - Session metadata (host name, topic) stored and surfaced to AI
+Optimized for free-tier deployment:
+  - No FAISS dependency (replaced with numpy cosine similarity)
+  - No local ML models (embeddings come from Gemini API)
 """
 
 import asyncio
@@ -22,10 +19,8 @@ import secrets
 from datetime import datetime
 from uuid import uuid4
 from typing import Optional
-import faiss
-import numpy as np
 
-from duplicate_detector import get_embedding_async, is_duplicate_with_index_async, EMBEDDING_DIM
+from duplicate_detector import get_embedding_async, is_duplicate_with_index_async
 
 # In-memory store: { session_id: session_data }
 _sessions: dict = {}
@@ -40,11 +35,6 @@ def _get_lock(session_id: str) -> asyncio.Lock:
     return _session_locks[session_id]
 
 
-def _build_fresh_index() -> faiss.IndexFlatIP:
-    """Create a new empty FAISS inner-product index (used for cosine similarity after L2 normalisation)."""
-    return faiss.IndexFlatIP(EMBEDDING_DIM)
-
-
 def create_session(session_id: str) -> dict:
     """Create a meeting session if missing; preserve if it already exists."""
     if session_id in _sessions:
@@ -53,26 +43,23 @@ def create_session(session_id: str) -> dict:
         "id": session_id,
         "created_at": datetime.utcnow().isoformat(),
         "questions": [],
-        "embeddings": [],
-        "faiss_index": _build_fresh_index(),
+        "embeddings": [],          # plain list — replaces FAISS index
         "participants": set(),
         "host_name": None,
         "meeting_topic": None,
-        "host_token": None,  # Only set when host starts the session
+        "host_token": None,
     }
     return {"session_id": session_id, "status": "created"}
 
 
 def reset_session(session_id: str) -> dict:
     """Reset a meeting session to a clean state (called when host starts a new meeting)."""
-    # Generate a fresh secret token — only returned to the host client at session start
     host_token = secrets.token_hex(24)
     _sessions[session_id] = {
         "id": session_id,
         "created_at": datetime.utcnow().isoformat(),
         "questions": [],
         "embeddings": [],
-        "faiss_index": _build_fresh_index(),
         "participants": set(),
         "host_name": None,
         "meeting_topic": None,
@@ -126,7 +113,7 @@ async def process_question(
     Core logic: check for duplicates, then either accept or reject the question.
 
     Returns a result dict with:
-      - status:           "unique" or "duplicate" or "limit_reached"
+      - status:           "unique" or "duplicate"
       - message:          Text to show the attendee
       - points_earned:    0 always (awarded later when host stars)
       - question_id:      UUID of the saved question (only if unique)
@@ -140,17 +127,18 @@ async def process_question(
 
         session["participants"].add(user_id)
 
-        # --- Duplicate check using persistent FAISS index ---
-        if ai_enabled and session["embeddings"]:
-            embedding = await get_embedding_async(text)
+        # Compute embedding for duplicate check
+        embedding = await get_embedding_async(text)
+
+        # Duplicate check using numpy cosine similarity
+        if ai_enabled and session["embeddings"] and embedding:
             dup, score = await is_duplicate_with_index_async(
                 text,
                 embedding,
                 session["questions"],
-                session["faiss_index"],
+                session["embeddings"],   # pass plain list instead of FAISS index
             )
         else:
-            embedding = await get_embedding_async(text)
             dup, score = False, 0.0
 
         if dup:
@@ -166,9 +154,8 @@ async def process_question(
                 "similarity_score": score,
             }
 
-        # --- Accept unique question ---
+        # Accept unique question
         question_id = str(uuid4())
-
         question = {
             "id": question_id,
             "user_id": user_id,
@@ -179,15 +166,8 @@ async def process_question(
         }
 
         session["questions"].append(question)
-        session["embeddings"].append(embedding)
-
-        # Add to persistent FAISS index (incremental — no rebuild)
-        vec = np.array([embedding], dtype=np.float32)
-        faiss.normalize_L2(vec)
-        session["faiss_index"].add(vec)
-
-        # Update per-user question counter (O(1))
-
+        if embedding:
+            session["embeddings"].append(embedding)
 
         return {
             "status": "unique",
@@ -217,8 +197,7 @@ def get_questions(session_id: str) -> list:
     session = _sessions.get(session_id)
     if not session:
         return []
-    questions = session["questions"]
-    return sorted(questions, key=lambda q: (0 if q["priority"] == "priority" else 1))
+    return sorted(session["questions"], key=lambda q: (0 if q["priority"] == "priority" else 1))
 
 
 def get_participants(session_id: str) -> list:

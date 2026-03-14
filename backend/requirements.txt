@@ -2,11 +2,11 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 
-# AI / ML
-sentence-transformers>=3.0.0
-faiss-cpu>=1.8.0
-numpy>=1.26.0
+# Gemini AI (embeddings + LLM duplicate detection + context answering)
 google-genai>=1.0.0
+
+# Numeric (lightweight — no torch/ML models needed)
+numpy>=1.26.0
 
 # Database
 motor>=3.3.0
@@ -24,5 +24,5 @@ youtube-transcript-api>=0.6.0
 # Environment variables
 python-dotenv>=1.0.0
 
-# LiveKit RTC (optional — used only if RTC_PROVIDER_URL is set)
+# LiveKit RTC (optional — only used if RTC_PROVIDER_URL is set)
 livekit-api>=0.7.0
