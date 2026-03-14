@@ -389,16 +389,62 @@ async def submit_question(session_id: str, body: QuestionRequest):
     """
     Submit a question from an attendee.
 
-    Rules:
-      - Every UNIQUE question always appears in the host inbox.
-      - Semantic duplicates are filtered (attendee gets an informational reply).
-      - AI may auto-answer from context, but never hides unique questions from the host.
+    Pipeline (in order):
+      1. AI context check first — if meeting context exists and the AI can answer,
+         return an AI answer immediately. Question is NOT saved to host inbox.
+      2. Semantic duplicate check — if the question is similar to one already in
+         the inbox, tell the attendee to wait. Question is NOT saved again.
+      3. Unique question — save to host inbox, broadcast via WebSocket, persist to DB.
     """
     user_status = rw.get_status(body.user_id)
     total_points = user_status["points"]
     ai_enabled = _ai_mode.get(session_id, True)
     meta = sm.get_session_metadata(session_id)
 
+    AI_ANSWER_SUFFIX = "\n\n— Answered by AI"
+
+    # ── STEP 1: Try to answer from AI context FIRST ────────────────────────────
+    if ai_enabled and cm.has_context(session_id):
+        score = 0.0
+        answer_text = None
+
+        context_answer = cm.find_answer_in_context(session_id, body.text, threshold=ANSWER_MATCH_THRESHOLD)
+        score = context_answer.get("score", 0.0) if context_answer else 0.0
+
+        if context_answer and context_answer.get("found"):
+            answer_text = await asyncio.to_thread(
+                cm.generate_answer_from_draft,
+                session_id,
+                body.text,
+                context_answer.get("answer", ""),
+                meta.get("host_name"),
+                meta.get("meeting_topic"),
+            )
+            if not answer_text:
+                raw = (context_answer.get("answer", "") or "").strip()
+                answer_text = raw.split(".")[0].strip() if raw else None
+
+        if not answer_text and score >= FALLBACK_GEN_THRESHOLD:
+            answer_text = await asyncio.to_thread(
+                cm.generate_answer_from_draft,
+                session_id,
+                body.text,
+                None,
+                meta.get("host_name"),
+                meta.get("meeting_topic"),
+            )
+
+        if answer_text:
+            # AI answered — do NOT add to host inbox at all
+            return QuestionResponse(
+                status="context_answered",
+                message=answer_text + AI_ANSWER_SUFFIX,
+                points_earned=0,
+                total_points=total_points,
+                similarity_score=score or None,
+            )
+
+    # ── STEP 2 & 3: Duplicate check then accept unique into host inbox ─────────
     result = await sm.process_question(
         session_id,
         body.user_id,
@@ -406,7 +452,7 @@ async def submit_question(session_id: str, body: QuestionRequest):
         ai_enabled,
     )
 
-    # Duplicate or limit_reached — return early, nothing goes to host inbox
+    # Duplicate — return early, nothing goes to host inbox
     if result["status"] != "unique":
         return QuestionResponse(
             status=result["status"],
@@ -416,7 +462,7 @@ async def submit_question(session_id: str, body: QuestionRequest):
             similarity_score=result.get("similarity_score"),
         )
 
-    # Unique question — add to host inbox and broadcast
+    # Unique question — broadcast to host and persist
     question_doc = {
         "id": result["question_id"],
         "user_id": body.user_id,
@@ -434,56 +480,6 @@ async def submit_question(session_id: str, body: QuestionRequest):
         },
     )
     asyncio.create_task(_safe_task(db.save_question(session_id, question_doc), "save_question"))
-
-    # AI answer attempt (after question is safely in inbox)
-    AI_ANSWER_SUFFIX = "\n\n— Answered by AI"
-    if ai_enabled:
-        score = 0.0
-        answer_text = None
-
-        if cm.has_context(session_id):
-            context_answer = cm.find_answer_in_context(session_id, body.text, threshold=ANSWER_MATCH_THRESHOLD)
-            score = context_answer.get("score", 0.0) if context_answer else 0.0
-
-            if context_answer and context_answer.get("found"):
-                answer_text = await asyncio.to_thread(
-                    cm.generate_answer_from_draft,
-                    session_id,
-                    body.text,
-                    context_answer.get("answer", ""),
-                    meta.get("host_name"),
-                    meta.get("meeting_topic"),
-                )
-                if not answer_text:
-                    raw = (context_answer.get("answer", "") or "").strip()
-                    answer_text = raw.split(".")[0].strip() if raw else None
-
-            if not answer_text and score >= FALLBACK_GEN_THRESHOLD:
-                answer_text = await asyncio.to_thread(
-                    cm.generate_answer_from_draft,
-                    session_id,
-                    body.text,
-                    None,
-                    meta.get("host_name"),
-                    meta.get("meeting_topic"),
-                )
-
-        if not answer_text:
-            answer_text = await asyncio.to_thread(
-                cm.generate_open_answer, 
-                body.text,
-                meta.get("host_name"),
-                meta.get("meeting_topic")
-            )
-
-        if answer_text:
-            return QuestionResponse(
-                status="context_answered",
-                message=answer_text + AI_ANSWER_SUFFIX,
-                points_earned=0,
-                total_points=total_points,
-                similarity_score=score or None,
-            )
 
     return QuestionResponse(
         status="unique",

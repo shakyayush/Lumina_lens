@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import LiveStream from './LiveStream'
 
 const AudienceView = ({ sessionId, apiUrl, currentUser }) => {
   const [messages, setMessages] = useState([])
@@ -88,7 +87,9 @@ const AudienceView = ({ sessionId, apiUrl, currentUser }) => {
       const res = await fetch(`${apiUrl}/rewards/${userId}`)
       const data = await res.json()
       setPoints(Number(data?.points) || 0)
-    } catch (e) {}
+    } catch (e) {
+      console.warn('fetchPoints error', e)
+    }
   }
 
   const fetchMetadata = async () => {
@@ -99,7 +100,9 @@ const AudienceView = ({ sessionId, apiUrl, currentUser }) => {
         setHostName(data.host_name || '')
         setMeetingTopic(data.meeting_topic || '')
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn('fetchMetadata error', e)
+    }
   }
 
   const sendMessage = async (e) => {
@@ -226,16 +229,6 @@ const AudienceView = ({ sessionId, apiUrl, currentUser }) => {
         </div>
       </div>
 
-      {/* Live Video Broadcast Area */}
-      <div className="p-3 bg-black/5 border-b border-[var(--border-subtle)] shrink-0">
-        <LiveStream 
-          sessionId={sessionId} 
-          apiUrl={apiUrl} 
-          role="audience" 
-          userId={userId} 
-          hostName={hostName}
-        />
-      </div>
 
       {/* Messages Area */}
       <div className="p-3 sm:p-4 flex-1 overflow-hidden">

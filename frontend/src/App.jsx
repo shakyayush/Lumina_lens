@@ -5,7 +5,7 @@ import LoginPage from './components/LoginPage'
 import Dashboard from './components/Dashboard'
 import HostDashboard from './components/HostDashboard'
 import AudienceView from './components/AudienceView'
-import WebCamVideo from './components/WebCamVideo'
+import LiveStream from './components/LiveStream'
 
 const API_URL =
   import.meta.env.VITE_API_URL ||
@@ -62,7 +62,11 @@ function SignedInApp() {
     window.addEventListener('resize', onResize)
     window.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mouseup', onMouseUp)
-    return () => { window.removeEventListener('resize', onResize); window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp) }
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
   }, [isCompactLayout])
 
   const startMeeting = async (targetId, selectedRole) => {
@@ -88,12 +92,10 @@ function SignedInApp() {
     setHostToken(null)
   }
 
-  // Dashboard view
   if (!inMeeting) {
     return <Dashboard apiUrl={API_URL} onStartMeeting={startMeeting} />
   }
 
-  // In-meeting view
   const displayName = user?.fullName || user?.firstName || 'You'
   const avatarUrl   = user?.imageUrl
   const rtcUserId   = user?.id || 'anon'
@@ -141,42 +143,62 @@ function SignedInApp() {
         className={`flex-1 ${isCompactLayout ? 'flex flex-col overflow-y-auto p-2 sm:p-3 gap-2 sm:gap-3' : 'grid overflow-hidden p-4'} relative z-10`}
         style={isCompactLayout ? undefined : { gridTemplateColumns: `minmax(0,1fr) 8px ${rightPanelWidth}px`, gap: '8px' }}
       >
-        {/* Video Feed */}
+        {/* Single unified video player — LiveKit handles host publishing and audience subscribing */}
         <div className={`flex flex-col glass-panel rounded-2xl overflow-hidden relative group shadow-2xl min-w-0 ${isCompactLayout ? (isTinyPhone ? 'h-[30vh] min-h-[180px]' : 'h-[34vh] min-h-[210px]') : ''}`}>
-          <WebCamVideo
-            isCameraOn={isCameraOn} isMuted={isMuted}
-            sessionId={sessionId} apiUrl={API_URL}
-            role={role} rtcUserId={rtcUserId}
-            enableMultimodal={role === 'host'}
+          <LiveStream
+            sessionId={sessionId}
+            apiUrl={API_URL}
+            role={role}
+            userId={rtcUserId}
+            isCameraOn={isCameraOn}
+            isMuted={isMuted}
           />
-          <div className={`absolute ${isCompactLayout ? 'bottom-2 left-1/2 -translate-x-1/2 px-2 py-2 gap-1.5 opacity-100' : 'bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 gap-6 opacity-0 group-hover:opacity-100'} glass-panel rounded-full flex transition-opacity duration-300 pointer-events-auto`}>
-            <button type="button" onClick={() => setIsMuted(p => !p)} className={`${isCompactLayout ? 'min-w-[68px] h-8 text-[10px]' : 'min-w-[90px] h-10 text-xs'} rounded-full flex items-center justify-center transition-colors shadow-lg font-semibold uppercase tracking-wide ${isMuted ? 'bg-slate-200 text-slate-700 hover:bg-slate-300' : 'bg-red-500 text-white hover:bg-red-600'}`}>
-              {isMuted ? 'Unmute' : 'Mute'}
+          {/* Camera/mic control bar */}
+          <div className={`absolute ${isCompactLayout ? 'bottom-2 left-1/2 -translate-x-1/2 px-2 py-2 gap-1.5 opacity-100' : 'bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 gap-4 opacity-0 group-hover:opacity-100'} glass-panel rounded-full flex transition-opacity duration-300 pointer-events-auto z-10`}>
+            <button
+              type="button"
+              onClick={() => setIsMuted(p => !p)}
+              className={`${isCompactLayout ? 'min-w-[68px] h-8 text-[10px]' : 'min-w-[90px] h-10 text-xs'} rounded-full flex items-center justify-center gap-1.5 transition-colors shadow-lg font-semibold ${isMuted ? 'bg-slate-200 text-slate-700 hover:bg-slate-300' : 'bg-red-500 text-white hover:bg-red-600'}`}
+            >
+              {isMuted ? '🎙 Unmute' : '🔇 Mute'}
             </button>
-            <button type="button" onClick={() => setIsCameraOn(p => !p)} className={`${isCompactLayout ? 'min-w-[90px] h-8 text-[10px]' : 'min-w-[120px] h-10 text-xs'} rounded-full bg-[rgba(255,255,255,0.1)] hover:bg-[rgba(255,255,255,0.2)] flex items-center justify-center transition-colors font-semibold uppercase tracking-wide`}>
-              {isCameraOn ? 'Turn Camera Off' : 'Turn Camera On'}
+            <button
+              type="button"
+              onClick={() => setIsCameraOn(p => !p)}
+              className={`${isCompactLayout ? 'min-w-[90px] h-8 text-[10px]' : 'min-w-[120px] h-10 text-xs'} rounded-full bg-[rgba(255,255,255,0.1)] hover:bg-[rgba(255,255,255,0.2)] flex items-center justify-center gap-1.5 transition-colors font-semibold`}
+            >
+              {isCameraOn ? '📷 Cam Off' : '📷 Cam On'}
             </button>
-            {role === 'host' && (
-              <button className={`${isCompactLayout ? (isTinyPhone ? 'hidden' : 'min-w-[84px] h-8 text-[10px]') : 'min-w-[110px] h-10 text-xs'} rounded-full bg-[rgba(255,255,255,0.1)] hover:bg-[rgba(255,255,255,0.2)] flex items-center justify-center transition-colors font-semibold uppercase tracking-wide`}>
-                Share Screen
-              </button>
-            )}
           </div>
         </div>
 
-        {/* Drag divider */}
+        {/* Drag divider (desktop only) */}
         {!isCompactLayout && (
-          <div role="separator" aria-orientation="vertical" onMouseDown={() => { isResizingRef.current = true; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none' }} className="w-2 cursor-col-resize group flex items-center justify-center">
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            onMouseDown={() => { isResizingRef.current = true; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none' }}
+            className="w-2 cursor-col-resize group flex items-center justify-center"
+          >
             <div className="h-16 w-1 rounded-full bg-slate-300 group-hover:bg-blue-400 transition-colors" />
           </div>
         )}
 
-        {/* Right panel */}
+        {/* Right panel — host dashboard or audience Q&A */}
         <div className={`h-full flex flex-col min-w-0 ${isCompactLayout ? (isTinyPhone ? 'min-h-[62vh]' : 'min-h-[58vh]') : ''}`}>
           {role === 'host' ? (
-            <HostDashboard sessionId={sessionId} apiUrl={API_URL} hostToken={hostToken} currentUser={{ displayName, imageUrl: avatarUrl }} />
+            <HostDashboard
+              sessionId={sessionId}
+              apiUrl={API_URL}
+              hostToken={hostToken}
+              currentUser={{ displayName, imageUrl: avatarUrl }}
+            />
           ) : (
-            <AudienceView sessionId={sessionId} apiUrl={API_URL} currentUser={{ uid: user?.id, displayName, photoURL: avatarUrl }} />
+            <AudienceView
+              sessionId={sessionId}
+              apiUrl={API_URL}
+              currentUser={{ uid: user?.id, displayName, photoURL: avatarUrl }}
+            />
           )}
         </div>
       </main>

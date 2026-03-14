@@ -3,128 +3,190 @@ import {
   LiveKitRoom,
   VideoConference,
   RoomAudioRenderer,
-  ControlBar,
   GridLayout,
   ParticipantTile,
   useTracks,
-  AudioTrack,
-  VideoTrack
 } from '@livekit/components-react'
 import '@livekit/components-styles'
 import { Track } from 'livekit-client'
 
-export default function LiveStream({ sessionId, apiUrl, role, userId, hostName }) {
-  const [token, setToken] = useState(null)
-  const [wsUrl, setWsUrl] = useState(null)
-  const [error, setError] = useState(null)
+/**
+ * LiveStream — unified LiveKit video component for both host and audience.
+ *
+ * Props:
+ *  sessionId   — meeting room ID
+ *  apiUrl      — backend base URL
+ *  role        — 'host' | 'audience'
+ *  userId      — user identifier sent to the token endpoint
+ *  isCameraOn  — whether the camera is on (host only; audience always false)
+ *  isMuted     — whether the microphone is muted
+ */
+export default function LiveStream({
+  sessionId,
+  apiUrl,
+  role,
+  userId,
+  isCameraOn = false,
+  isMuted = true,
+}) {
+  const [token, setToken]   = useState(null)
+  const [wsUrl, setWsUrl]   = useState(null)
+  const [error, setError]   = useState(null)
+  const [roomKey, setRoomKey] = useState(0) // bump to reconnect
 
+  // Fetch a fresh LiveKit token when session/role/user changes
   useEffect(() => {
     let mounted = true
-    
+    setToken(null)
+    setWsUrl(null)
+    setError(null)
+
     async function fetchToken() {
       try {
         const res = await fetch(`${apiUrl}/session/${sessionId}/rtc-token`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: userId, role })
+          body: JSON.stringify({ user_id: userId, role }),
         })
-        
         const data = await res.json()
-        
-        if (!res.ok) {
-          throw new Error(data.detail || 'Failed to get stream token')
-        }
-        
+        if (!res.ok) throw new Error(data.detail || 'Failed to get stream token')
         if (mounted) {
           setToken(data.token)
           setWsUrl(data.ws_url)
+          setRoomKey(k => k + 1)
         }
       } catch (e) {
         if (mounted) setError(e.message)
       }
     }
-    
+
     fetchToken()
-    
     return () => { mounted = false }
   }, [sessionId, apiUrl, role, userId])
 
+  // ── Error state ──────────────────────────────────────────────────────────
   if (error) {
     return (
-      <div className="bg-red-500/10 text-red-400 p-4 border border-red-500/20 rounded-xl text-center text-sm">
-        Video Stream Error: {error}
+      <div className="w-full h-full flex items-center justify-center bg-slate-900 rounded-2xl">
+        <div className="text-center p-4">
+          <p className="text-red-400 text-sm font-medium">⚠️ Stream unavailable</p>
+          <p className="text-slate-500 text-xs mt-1">{error}</p>
+          <button
+            onClick={() => { setError(null); setToken(null) }}
+            className="mt-3 text-xs text-blue-400 hover:text-blue-300 underline"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     )
   }
 
+  // ── Loading state ────────────────────────────────────────────────────────
   if (!token || !wsUrl) {
     return (
-      <div className="bg-slate-800/50 p-6 rounded-xl text-center border border-slate-700/50 animate-pulse">
-        <p className="text-slate-400 font-medium text-sm">Connecting to secure stream...</p>
+      <div className="w-full h-full flex items-center justify-center bg-slate-900 rounded-2xl">
+        <div className="text-center">
+          <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-slate-400 text-xs">Connecting to meeting room…</p>
+        </div>
       </div>
     )
   }
 
+  // ── Connected ────────────────────────────────────────────────────────────
   return (
     <LiveKitRoom
-      video={role === 'host'}
-      audio={role === 'host'}
+      key={roomKey}
       token={token}
       serverUrl={wsUrl}
+      // Host publishes camera+mic controlled by the toolbar; audience just listens
+      video={role === 'host' ? isCameraOn : false}
+      audio={role === 'host' ? !isMuted : false}
       data-lk-theme="default"
-      className={`rounded-2xl overflow-hidden shadow-2xl border border-[var(--border-subtle)] bg-black/40 ${role === 'host' ? 'h-[300px] sm:h-[400px]' : 'h-full aspect-video'}`}
+      className="w-full h-full relative"
+      onDisconnected={() => {
+        // Clear token so loading state shows and reconnect can happen
+        setToken(null)
+        setWsUrl(null)
+      }}
     >
       {role === 'host' ? (
-        // Host gets the full control bar to mute/unmute and stop video
-        <div className="relative h-full w-full flex flex-col">
-          <div className="absolute top-4 left-4 z-10 bg-black/60 backdrop-blur px-3 py-1.5 rounded-full border border-white/10 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-white text-xs font-bold tracking-wide">BROADCASTING</span>
-          </div>
-          <div className="flex-1 min-h-0">
-             <VideoConference />
-          </div>
-        </div>
+        <HostView isCameraOn={isCameraOn} isMuted={isMuted} />
       ) : (
-        // Audience only watches the stream passively
-        <AudienceStreamReceiver hostName={hostName} />
+        <AudienceView />
       )}
-      {/* Required to render audio tracks for the audience */}
+      {/* Plays remote audio tracks for the audience */}
       <RoomAudioRenderer />
     </LiveKitRoom>
   )
 }
 
-// Custom component to just render the host's video feed for the audience
-function AudienceStreamReceiver({ hostName }) {
-  // Find camera tracks published by other users (the host)
+// ── Host view: shows own video feed via VideoConference ─────────────────────
+function HostView({ isCameraOn, isMuted }) {
+  return (
+    <div className="relative w-full h-full bg-slate-900">
+      {/* LiveKit's built-in conference UI — handles local track publishing */}
+      <VideoConference />
+
+      {/* Broadcasting badge */}
+      {isCameraOn && (
+        <div className="absolute top-3 right-3 z-20 flex items-center gap-1.5 bg-red-600/90 backdrop-blur-sm text-white text-[10px] font-bold px-2.5 py-1.5 rounded-full shadow-lg pointer-events-none">
+          <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
+          LIVE
+        </div>
+      )}
+
+      {/* Camera-off placeholder */}
+      {!isCameraOn && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 z-10">
+          <div className="text-center px-6 py-4 rounded-2xl border border-white/10 bg-white/5">
+            <div className="w-14 h-14 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 mx-auto mb-3 flex items-center justify-center text-xl">🎤</div>
+            <p className="text-slate-300 text-sm font-medium">Camera is off</p>
+            <p className="text-slate-500 text-xs mt-1">Use the toolbar below to turn it on</p>
+            {!isMuted && (
+              <div className="mt-2 flex items-center justify-center gap-1.5 text-green-400 text-xs">
+                <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+                Mic is live
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Audience view: subscribes to host tracks and renders them ───────────────
+function AudienceView() {
   const tracks = useTracks(
     [
       { source: Track.Source.Camera, withPlaceholder: true },
       { source: Track.Source.ScreenShare, withPlaceholder: false },
     ],
     { onlySubscribed: false },
-  );
-  
+  )
+
   return (
-    <div className="relative w-full h-full bg-slate-900 flex justify-center items-center">
+    <div className="relative w-full h-full bg-slate-900">
       {tracks.length === 0 ? (
-        <div className="flex flex-col items-center justify-center p-8 text-center animate-pulse">
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-8 animate-pulse">
           <div className="w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center mb-4 border border-slate-700">
-             <span className="text-2xl opacity-50">📷</span>
+            <span className="text-2xl opacity-50">📡</span>
           </div>
-          <p className="text-slate-400 font-medium tracking-wide">Waiting for host to share video...</p>
+          <p className="text-slate-400 text-sm font-medium">Waiting for host to broadcast…</p>
+          <p className="text-slate-600 text-xs mt-1">The host needs to turn on their camera</p>
         </div>
       ) : (
         <GridLayout tracks={tracks} style={{ height: '100%', width: '100%' }}>
           <ParticipantTile />
         </GridLayout>
       )}
-      
-      {/* Overlay label */}
-      <div className="absolute bottom-4 left-4 z-10 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2 max-w-[80%]">
-        <span className="text-[10px] text-slate-300 font-bold uppercase tracking-wider">Host</span>
-        <span className="text-xs text-white font-medium truncate">{hostName || 'Streaming'}</span>
+
+      {/* Label */}
+      <div className="absolute bottom-3 left-3 z-10 bg-black/60 backdrop-blur-sm px-3 py-1 rounded-lg border border-white/10 flex items-center gap-2 pointer-events-none">
+        <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />
+        <span className="text-[10px] text-slate-300 font-semibold uppercase tracking-wider">Live Stream</span>
       </div>
     </div>
   )

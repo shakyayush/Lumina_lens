@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import LiveStream from './LiveStream'
 
 const HostDashboard = ({ sessionId, apiUrl, hostToken }) => {
   const [questions, setQuestions] = useState([])
@@ -13,8 +12,6 @@ const HostDashboard = ({ sessionId, apiUrl, hostToken }) => {
   const [isMetadataSaved, setIsMetadataSaved] = useState(false)
   const [isNarrow, setIsNarrow] = useState(window.innerWidth < 640)
   const [showDraftBox, setShowDraftBox] = useState(window.innerWidth >= 640)
-  const [participantCount, setParticipantCount] = useState(0)
-  const [isBroadcasting, setIsBroadcasting] = useState(false)
   const ws = useRef(null)
 
   useEffect(() => {
@@ -142,17 +139,6 @@ const HostDashboard = ({ sessionId, apiUrl, hostToken }) => {
       {/* Tabs */}
       <div className="flex flex-col border-b border-[var(--border-subtle)] bg-white/70">
         
-        {/* Live Video Broadcast Area (Shows above tabs if active) */}
-        {isBroadcasting && (
-          <div className="p-3 bg-black/5 border-b border-[var(--border-subtle)]">
-            <LiveStream 
-              sessionId={sessionId} 
-              apiUrl={apiUrl} 
-              role="host" 
-              userId="host" 
-            />
-          </div>
-        )}
 
         <div className="flex">
           <button
@@ -210,14 +196,6 @@ const HostDashboard = ({ sessionId, apiUrl, hostToken }) => {
                 className="flex-1 px-3 py-1.5 rounded-lg bg-emerald-600 disabled:bg-emerald-300 disabled:cursor-not-allowed text-white text-[11px] font-semibold uppercase tracking-wide hover:bg-emerald-500 transition-colors"
               >
                 {isMetadataSaved ? '✓ Saved to AI' : 'Save Host Info'}
-              </button>
-              <button
-                onClick={() => setIsBroadcasting(!isBroadcasting)}
-                className={`flex-1 px-3 py-1.5 rounded-lg text-white text-[11px] font-semibold uppercase tracking-wide transition-colors ${
-                  isBroadcasting ? 'bg-red-500 hover:bg-red-600' : 'bg-purple-600 hover:bg-purple-500'
-                }`}
-              >
-                {isBroadcasting ? '⏹ Stop Broadcast' : '▶️ Start Broadcast'}
               </button>
             </div>
           </div>
