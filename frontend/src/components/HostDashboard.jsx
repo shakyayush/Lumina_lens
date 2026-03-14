@@ -12,6 +12,7 @@ const HostDashboard = ({ sessionId, apiUrl, hostToken }) => {
   const [isMetadataSaved, setIsMetadataSaved] = useState(false)
   const [isNarrow, setIsNarrow] = useState(window.innerWidth < 640)
   const [showDraftBox, setShowDraftBox] = useState(window.innerWidth >= 640)
+  const [participantCount, setParticipantCount] = useState(0)
   const ws = useRef(null)
 
   useEffect(() => {
